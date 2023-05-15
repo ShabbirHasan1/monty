@@ -43,7 +43,7 @@ pub(crate) enum Expr<T, Funcs> {
     Call {
         func: Funcs,
         args: Vec<Expr<T, Funcs>>,
-        // kwargs: Vec<(T, Expr<T, Funcs>)>,
+        kwargs: Vec<(T, Expr<T, Funcs>)>,
     },
     Op {
         left: Box<Expr<T, Funcs>>,

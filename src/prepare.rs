@@ -12,7 +12,7 @@ pub(crate) type RunExpr = Expr<usize, Builtins>;
 /// TODO:
 /// * pre-calculate const expressions
 /// * const assignment add directly to namespace
-pub(crate) fn prepare(nodes: Vec<Node<String, String>>) -> PrepareResult<(Vec<Object>, Vec<RunNode>)> {
+pub(crate) fn prepare(nodes: Vec<Node<String, String>>, _input_names: &[&str]) -> PrepareResult<(Vec<Object>, Vec<RunNode>)> {
     let mut namespace = Namespace::new(nodes.len());
     let new_nodes = prepare_nodes(nodes, &mut namespace)?;
     let initial_namespace = vec![Object::Undefined; namespace.names_count];
@@ -73,13 +73,17 @@ fn prepare_expression(expr: Expr<String, String>, namespace: &mut Namespace) -> 
             op,
             right: Box::new(prepare_expression(*right, namespace)?),
         }),
-        Expr::Call { func, args } => {
+        Expr::Call { func, args, kwargs } => {
             let func = Builtins::find(&func)?;
             Ok(Expr::Call {
                 func,
                 args: args
                     .into_iter()
                     .map(|e| prepare_expression(e, namespace))
+                    .collect::<PrepareResult<Vec<_>>>()?,
+                kwargs: kwargs
+                    .into_iter()
+                    .map(|(_, e)| prepare_expression(e, namespace).map(|e| (0, e)))
                     .collect::<PrepareResult<Vec<_>>>()?,
             })
         }

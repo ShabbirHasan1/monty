@@ -14,8 +14,8 @@ pub type ParseResult<T> = Result<T, Cow<'static, str>>;
 type ParseNode = Node<String, String>;
 type ParseExpr = Expr<String, String>;
 
-pub(crate) fn parse(code: &str, filename: Option<&str>) -> ParseResult<Vec<ParseNode>> {
-    match parse_program(code, filename.unwrap_or("code.py")) {
+pub(crate) fn parse(code: &str, filename: &str) -> ParseResult<Vec<ParseNode>> {
+    match parse_program(code, filename) {
         Ok(ast) => {
             // dbg!(&ast);
             parse_statements(ast)
@@ -200,15 +200,14 @@ fn parse_expression(expression: AstExpr) -> ParseResult<ParseExpr> {
             op: convert_compare_op(first(ops)?),
             right: Box::new(parse_expression(first(comparators)?)?),
         }),
-        ExprKind::Call { func, args, keywords: _ } => {
+        ExprKind::Call { func, args, keywords } => {
             let func = get_name(*func)?;
             let args = args.into_iter().map(parse_expression).collect::<ParseResult<_>>()?;
-            // let kwargs = keywords
-            //     .into_iter()
-            //     .map(parse_kwargs)
-            //     .collect::<ParseResult<Vec<_>>>()?;
-            // Ok(Expr::Call { func, args, kwargs })
-            Ok(Expr::Call { func, args })
+            let kwargs = keywords
+                .into_iter()
+                .map(parse_kwargs)
+                .collect::<ParseResult<Vec<_>>>()?;
+            Ok(Expr::Call { func, args, kwargs })
         }
         ExprKind::FormattedValue {
             value: _,
@@ -239,7 +238,6 @@ fn parse_expression(expression: AstExpr) -> ParseResult<ParseExpr> {
     }
 }
 
-#[allow(dead_code)]
 fn parse_kwargs(kwarg: Keyword) -> ParseResult<(String, ParseExpr)> {
     let key = match kwarg.node.arg {
         Some(key) => key,

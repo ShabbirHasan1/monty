@@ -61,7 +61,7 @@ impl Frame {
                     Err(format!("name '{id}' is not defined").into())
                 }
             }
-            Expr::Call { func, args } => self.call_function(func, args),
+            Expr::Call { func, args, kwargs } => self.call_function(func, args, kwargs),
             Expr::Op { left, op, right } => self.op(left, op, right),
             Expr::CmpOp { left, op, right } => Ok(Cow::Owned(self.cmp_op(left, op, right)?.into())),
             Expr::List(elements) => {
@@ -115,7 +115,7 @@ impl Frame {
         }
     }
 
-    fn call_function(&self, builtin: &Builtins, args: &[RunExpr]) -> RunResult<Cow<Object>> {
+    fn call_function(&self, builtin: &Builtins, args: &[RunExpr], _kwargs: &[(usize, RunExpr)]) -> RunResult<Cow<Object>> {
         match builtin {
             Builtins::Print => {
                 for (i, arg) in args.iter().enumerate() {

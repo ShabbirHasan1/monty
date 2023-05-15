@@ -30,7 +30,7 @@ fn main() -> ExitCode {
     };
     let tic = Instant::now();
 
-    let ex = Executor::new(&code, Some(file_path)).unwrap();
+    let ex = Executor::new(&code, file_path, &[]).unwrap();
     match ex.run() {
         Ok(_) => {
             let toc = Instant::now();
@@ -68,10 +68,10 @@ struct Executor {
 }
 
 impl Executor {
-    fn new(code: &str, filename: Option<&str>) -> ParseResult<Self> {
+    fn new(code: &str, filename: &str, input_names: &[&str]) -> ParseResult<Self> {
         let nodes = parse(code, filename)?;
         // dbg!(&nodes);
-        let (initial_namespace, nodes) = prepare(nodes)?;
+        let (initial_namespace, nodes) = prepare(nodes, input_names)?;
         Ok(Self {
             initial_namespace,
             nodes,
