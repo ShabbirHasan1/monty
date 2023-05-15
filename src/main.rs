@@ -73,7 +73,7 @@ struct Executor {
 impl Executor {
     fn new(code: &str, filename: &str, input_names: &[&str]) -> ParseResult<Self> {
         let nodes = parse(code, filename)?;
-        dbg!(&nodes);
+        // dbg!(&nodes);
         let (initial_namespace, nodes) = prepare(nodes, input_names)?;
         Ok(Self {
             initial_namespace,

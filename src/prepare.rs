@@ -12,99 +12,19 @@ pub(crate) type RunExpr = Expr<usize, Builtins>;
 /// TODO:
 /// * pre-calculate const expressions
 /// * const assignment add directly to namespace
-
-
 pub(crate) fn prepare(nodes: Vec<Node<String, String>>, input_names: &[&str]) -> PrepareResult<(Vec<Object>, Vec<RunNode>)> {
-    let mut namespace = Namespace::new(nodes.len(), input_names);
-    let new_nodes = prepare_nodes(nodes, &mut namespace)?;
-    let initial_namespace = vec![Object::Undefined; namespace.names_count];
+    let mut p = Prepare::new(nodes.len(), input_names);
+    let new_nodes = p.prepare_nodes(nodes)?;
+    let initial_namespace = vec![Object::Undefined; p.names_count];
     Ok((initial_namespace, new_nodes))
 }
 
-fn prepare_nodes(nodes: Vec<Node<String, String>>, namespace: &mut Namespace) -> PrepareResult<Vec<RunNode>> {
-    let mut new_nodes = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        match node {
-            Node::Pass => (),
-            Node::Expr(expr) => {
-                let expr = prepare_expression(expr, namespace)?;
-                new_nodes.push(Node::Expr(expr));
-            }
-            Node::Assign { target, object: value } => {
-                let target = namespace.get_id(target);
-                let value = Box::new(prepare_expression(*value, namespace)?);
-                new_nodes.push(Node::Assign { target, object: value });
-            }
-            Node::OpAssign { target, op, object: value } => {
-                let target = namespace.get_id(target);
-                let value = Box::new(prepare_expression(*value, namespace)?);
-                new_nodes.push(Node::OpAssign { target, op, object: value });
-            }
-            Node::For {
-                target,
-                iter,
-                body,
-                or_else,
-            } => new_nodes.push(Node::For {
-                target: prepare_expression(target, namespace)?,
-                iter: prepare_expression(iter, namespace)?,
-                body: prepare_nodes(body, namespace)?,
-                or_else: prepare_nodes(or_else, namespace)?,
-            }),
-            Node::If { test, body, or_else } => new_nodes.push(Node::If {
-                test: prepare_expression(test, namespace)?,
-                body: prepare_nodes(body, namespace)?,
-                or_else: prepare_nodes(or_else, namespace)?,
-            }),
-        }
-    }
-    Ok(new_nodes)
-}
-
-fn prepare_expression(expr: Expr<String, String>, namespace: &mut Namespace) -> PrepareResult<RunExpr> {
-    match expr {
-        Expr::Constant(value) => Ok(Expr::Constant(value)),
-        Expr::Name(name) => Ok(Expr::Name(namespace.get_id(name))),
-        Expr::Op { left, op, right } => Ok(Expr::Op {
-            left: Box::new(prepare_expression(*left, namespace)?),
-            op,
-            right: Box::new(prepare_expression(*right, namespace)?),
-        }),
-        Expr::CmpOp { left, op, right } => Ok(Expr::CmpOp {
-            left: Box::new(prepare_expression(*left, namespace)?),
-            op,
-            right: Box::new(prepare_expression(*right, namespace)?),
-        }),
-        Expr::Call { func, args, kwargs } => {
-            let func = Builtins::find(&func)?;
-            Ok(Expr::Call {
-                func,
-                args: args
-                    .into_iter()
-                    .map(|e| prepare_expression(e, namespace))
-                    .collect::<PrepareResult<Vec<_>>>()?,
-                kwargs: kwargs
-                    .into_iter()
-                    .map(|(_, e)| prepare_expression(e, namespace).map(|e| (0, e)))
-                    .collect::<PrepareResult<Vec<_>>>()?,
-            })
-        }
-        Expr::List(elements) => {
-            let expressions = elements
-                .into_iter()
-                .map(|e| prepare_expression(e, namespace))
-                .collect::<PrepareResult<Vec<_>>>()?;
-            Ok(Expr::List(expressions))
-        }
-    }
-}
-
-struct Namespace {
+struct Prepare {
     name_map: AHashMap<String, usize>,
     names_count: usize,
 }
 
-impl Namespace {
+impl Prepare {
     fn new(capacity: usize, input_names: &[&str]) -> Self {
         let mut name_map = AHashMap::with_capacity(capacity);
         for (index, name) in input_names.iter().enumerate() {
@@ -112,6 +32,84 @@ impl Namespace {
         }
         let names_count = input_names.len();
         Self { name_map, names_count }
+    }
+
+    fn prepare_nodes(&mut self, nodes: Vec<Node<String, String>>) -> PrepareResult<Vec<RunNode>> {
+        let mut new_nodes = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            match node {
+                Node::Pass => (),
+                Node::Expr(expr) => {
+                    let expr = self.prepare_expression(expr)?;
+                    new_nodes.push(Node::Expr(expr));
+                }
+                Node::Assign { target, object } => {
+                    let target = self.get_id(target);
+                    let object = Box::new(self.prepare_expression(*object)?);
+                    new_nodes.push(Node::Assign { target, object });
+                }
+                Node::OpAssign { target, op, object } => {
+                    let target = self.get_id(target);
+                    let object = Box::new(self.prepare_expression(*object)?);
+                    new_nodes.push(Node::OpAssign { target, op, object });
+                }
+                Node::For {
+                    target,
+                    iter,
+                    body,
+                    or_else,
+                } => new_nodes.push(Node::For {
+                    target: self.prepare_expression(target)?,
+                    iter: self.prepare_expression(iter)?,
+                    body: self.prepare_nodes(body)?,
+                    or_else: self.prepare_nodes(or_else)?,
+                }),
+                Node::If { test, body, or_else } => new_nodes.push(Node::If {
+                    test: self.prepare_expression(test)?,
+                    body: self.prepare_nodes(body)?,
+                    or_else: self.prepare_nodes(or_else)?,
+                }),
+            }
+        }
+        Ok(new_nodes)
+    }
+
+    fn prepare_expression(&mut self, expr: Expr<String, String>) -> PrepareResult<RunExpr> {
+        match expr {
+            Expr::Constant(object) => Ok(Expr::Constant(object)),
+            Expr::Name(name) => Ok(Expr::Name(self.get_id(name))),
+            Expr::Op { left, op, right } => Ok(Expr::Op {
+                left: Box::new(self.prepare_expression(*left)?),
+                op,
+                right: Box::new(self.prepare_expression(*right)?),
+            }),
+            Expr::CmpOp { left, op, right } => Ok(Expr::CmpOp {
+                left: Box::new(self.prepare_expression(*left)?),
+                op,
+                right: Box::new(self.prepare_expression(*right)?),
+            }),
+            Expr::Call { func, args, kwargs } => {
+                let func = Builtins::find(&func)?;
+                Ok(Expr::Call {
+                    func,
+                    args: args
+                        .into_iter()
+                        .map(|e| self.prepare_expression(e))
+                        .collect::<PrepareResult<Vec<_>>>()?,
+                    kwargs: kwargs
+                        .into_iter()
+                        .map(|(_, e)| self.prepare_expression(e).map(|e| (0, e)))
+                        .collect::<PrepareResult<Vec<_>>>()?,
+                })
+            }
+            Expr::List(elements) => {
+                let expressions = elements
+                    .into_iter()
+                    .map(|e| self.prepare_expression(e))
+                    .collect::<PrepareResult<Vec<_>>>()?;
+                Ok(Expr::List(expressions))
+            }
+        }
     }
 
     fn get_id(&mut self, name: String) -> usize {
