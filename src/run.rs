@@ -1,19 +1,26 @@
 use std::borrow::Cow;
 
 use crate::evaluate::Evaluator;
+use crate::exceptions::{exc, exc_err, Exception, InternalRunError, RunError, StackFrame};
 use crate::object::Object;
-use crate::types::{Exit, Expr, ExprLoc, Identifier, Node, Operator};
+use crate::types::{CodeRange, Exit, ExprLoc, Identifier, Node, Operator};
 
-pub type RunResult<T> = Result<T, Cow<'static, str>>;
+pub type RunResult<T> = Result<T, RunError>;
 
 #[derive(Debug)]
-pub(crate) struct Frame {
+pub(crate) struct RunFrame {
     namespace: Vec<Object>,
+    parent: Option<StackFrame>,
+    name: Cow<'static, str>,
 }
 
-impl Frame {
+impl RunFrame {
     pub fn new(namespace: Vec<Object>) -> Self {
-        Self { namespace }
+        Self {
+            namespace,
+            parent: None,
+            name: "global".into(),
+        }
     }
 
     pub fn execute(&mut self, nodes: &[Node]) -> RunResult<Exit> {
@@ -28,7 +35,7 @@ impl Frame {
 
     fn execute_node(&mut self, node: &Node) -> RunResult<Option<Exit>> {
         match node {
-            Node::Pass => return Err("Unexpected `pass` in execution".into()),
+            Node::Pass => return exc_err!(InternalRunError::Error; "Unexpected `pass` in execution"),
             Node::Expr(expr) => {
                 self.execute_expr(expr)?;
             }
@@ -61,45 +68,39 @@ impl Frame {
     }
 
     fn assign(&mut self, target: &Identifier, object: &ExprLoc) -> RunResult<()> {
-        self.namespace[target.id] = match self.execute_expr(&object)? {
-            Cow::Borrowed(object) => object.clone(),
-            Cow::Owned(object) => object,
-        };
+        self.namespace[target.id] = self.execute_expr(&object)?.into_owned();
         Ok(())
     }
 
     fn op_assign(&mut self, target: &Identifier, op: &Operator, object: &ExprLoc) -> RunResult<()> {
         let right_object = self.execute_expr(&object)?.into_owned();
         if let Some(target_object) = self.namespace.get_mut(target.id) {
-            let ok = match op {
+            let r = match op {
                 Operator::Add => target_object.add_mut(right_object),
-                _ => return Err(format!("Assign operator {op:?} not yet implemented").into()),
+                _ => return exc_err!(InternalRunError::TodoError; "Assign operator {op:?} not yet implemented"),
             };
-            match ok {
-                true => Ok(()),
-                false => Err(format!(
-                    "({}) Cannot apply assign operator {op:?} {:?}",
-                    object.position, object.expr
-                )
-                .into()),
+            if let Err(right) = r {
+                let target_type = target_object.to_string();
+                let right_type = right.to_string();
+                let e = exc!(Exception::TypeError; "unsupported operand type(s) for {op}: '{target_type}' and '{right_type}'");
+                Err(e.with_frame(self.stack_frame(&object.position)).into())
+            } else {
+                Ok(())
             }
         } else {
-            Err(format!("name '{}' is not defined", target.name).into())
+            // TODO stack_frame once position is added to identifier
+            Err(Exception::NameError(target.name.clone().into()).into())
         }
     }
 
-    fn for_loop(&mut self, target: &ExprLoc, iter: &ExprLoc, body: &[Node], _or_else: &[Node]) -> RunResult<()> {
-        let target_id = match target.expr {
-            Expr::Name(ref ident) => ident.id,
-            _ => return Err("For target must be a name".into()),
-        };
+    fn for_loop(&mut self, target: &Identifier, iter: &ExprLoc, body: &[Node], _or_else: &[Node]) -> RunResult<()> {
         let range_size = match self.execute_expr(iter)?.as_ref() {
             Object::Range(s) => *s,
-            _ => return Err("For iter must be a range".into()),
+            _ => return exc_err!(InternalRunError::TodoError; "For iter must be a range"),
         };
 
         for object in 0i64..range_size {
-            self.namespace[target_id] = Object::Int(object);
+            self.namespace[target.id] = Object::Int(object);
             self.execute(body)?;
         }
         Ok(())
@@ -112,5 +113,9 @@ impl Frame {
             self.execute(or_else)?;
         }
         Ok(())
+    }
+
+    fn stack_frame(&self, position: &CodeRange) -> StackFrame {
+        StackFrame::new(position, &self.name, &self.parent)
     }
 }

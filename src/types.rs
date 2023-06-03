@@ -1,7 +1,8 @@
+use crate::exceptions::exc_err;
 use std::fmt;
 
 use crate::object::Object;
-use crate::parse_error::{ParseResult, ParseError};
+use crate::parse_error::{ParseError, ParseResult};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Operator {
@@ -77,8 +78,10 @@ impl fmt::Display for CmpOperator {
     }
 }
 
+// TODO rename to CodeLocation to avoid confusion with "position" elsewhere
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CodePosition {
+    // TODO add File
     line: u32,
     column: u32,
 }
@@ -141,6 +144,7 @@ impl ExprLoc {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Identifier {
+    // TODO pub position: CodeRange,
     pub name: String,
     pub id: usize,
 }
@@ -250,6 +254,8 @@ impl Expr {
     }
 }
 
+// TODO need a new AssignTo (enum of identifier, tuple) type used for "Assign" and "For"
+
 #[derive(Debug, Clone)]
 pub(crate) enum Node {
     Pass,
@@ -266,7 +272,7 @@ pub(crate) enum Node {
         object: ExprLoc,
     },
     For {
-        target: ExprLoc,
+        target: Identifier,
         iter: ExprLoc,
         body: Vec<Node>,
         or_else: Vec<Node>,
@@ -302,7 +308,7 @@ impl Builtins {
             "print" => Ok(Self::Print),
             "range" => Ok(Self::Range),
             "len" => Ok(Self::Len),
-            _ => Err(ParseError::Internal(format!("unknown builtin: {name}").into())),
+            _ => exc_err!(ParseError::Internal; "unknown builtin: {name}"),
         }
     }
 

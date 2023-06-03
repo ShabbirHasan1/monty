@@ -3,9 +3,10 @@ use std::collections::hash_map::Entry;
 use ahash::AHashMap;
 
 use crate::evaluate::Evaluator;
+use crate::exceptions::exc_err;
 use crate::object::Object;
-use crate::types::{Builtins, Expr, ExprLoc, Function, Identifier, Kwarg, Node};
 use crate::parse_error::{ParseError, ParseResult};
+use crate::types::{Builtins, Expr, ExprLoc, Function, Identifier, Kwarg, Node};
 
 /// TODO:
 /// * check variables exist before pre-assigning
@@ -83,7 +84,7 @@ impl Prepare {
                     body,
                     or_else,
                 } => new_nodes.push(Node::For {
-                    target: self.prepare_expression(target)?,
+                    target: self.get_id(target).0,
                     iter: self.prepare_expression(iter)?,
                     body: self.prepare_nodes(body)?,
                     or_else: self.prepare_nodes(or_else)?,
@@ -125,7 +126,9 @@ impl Prepare {
             Expr::Call { func, args, kwargs } => {
                 let ident = match func {
                     Function::Ident(ident) => ident,
-                    Function::Builtin(_) => return Err(ParseError::Internal("Call prepare expected an identifier".into())),
+                    Function::Builtin(_) => {
+                        return exc_err!(ParseError::Internal; "Call prepare expected an identifier")
+                    }
                 };
                 let func = Function::Builtin(Builtins::find(&ident.name)?);
                 Expr::Call {

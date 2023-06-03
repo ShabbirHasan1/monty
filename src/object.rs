@@ -1,3 +1,4 @@
+use crate::exceptions::{exc_err, Exception, InternalRunError};
 use crate::run::RunResult;
 use std::cmp::Ordering;
 use std::fmt;
@@ -16,6 +17,7 @@ pub enum Object {
     List(Vec<Object>),
     Tuple(Vec<Object>),
     Range(i64),
+    Exc(Exception),
 }
 
 impl fmt::Display for Object {
@@ -33,6 +35,7 @@ impl fmt::Display for Object {
             Self::List(v) => format_iterable('[', ']', v, f),
             Self::Tuple(v) => format_iterable('(', ')', v, f),
             Self::Range(size) => write!(f, "0:{size}"),
+            Self::Exc(exc) => write!(f, "0:{exc}"),
         }
     }
 }
@@ -93,7 +96,7 @@ impl Object {
         }
     }
 
-    pub fn add_mut(&mut self, other: Self) -> bool {
+    pub fn add_mut(&mut self, other: Self) -> Result<(), Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => {
                 *v1 += v2;
@@ -104,9 +107,9 @@ impl Object {
             (Self::List(v1), Self::List(v2)) => {
                 v1.extend(v2);
             }
-            _ => return false,
+            (_, other) => return Err(other),
         }
-        true
+        Ok(())
     }
 
     pub fn sub(&self, other: &Self) -> Option<Self> {
@@ -116,6 +119,7 @@ impl Object {
         }
     }
 
+    // TODO return an error
     pub fn eq(&self, other: &Self) -> Option<bool> {
         match (self, other) {
             (Self::Undefined, _) => None,
@@ -138,7 +142,7 @@ impl Object {
 
     pub fn bool(&self) -> RunResult<bool> {
         match self {
-            Self::Undefined => Err(format!("Cannot convert {} to bool", self).into()),
+            Self::Undefined => Err(InternalRunError::Undefined("".into()).into()),
             Self::Ellipsis => Ok(true),
             Self::None => Ok(false),
             Self::True => Ok(true),
@@ -150,6 +154,7 @@ impl Object {
             Self::List(v) => Ok(!v.is_empty()),
             Self::Tuple(v) => Ok(!v.is_empty()),
             Self::Range(v) => Ok(*v != 0),
+            Self::Exc(_) => Ok(true),
         }
     }
 
@@ -179,6 +184,14 @@ impl Object {
             Self::Str(v) => format!("\"{}\"", v),
             Self::Bytes(v) => format!("b\"{:?}\"", v),
             _ => self.to_string(),
+        }
+    }
+
+    pub fn as_int(&self) -> RunResult<i64> {
+        match self {
+            Self::Int(i) => Ok(*i),
+            // TODO use self.type
+            _ => exc_err!(Exception::TypeError; "'{self:?}' object cannot be interpreted as an integer"),
         }
     }
 }

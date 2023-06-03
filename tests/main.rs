@@ -19,7 +19,6 @@ macro_rules! execute_ok_tests {
     }
 }
 
-
 execute_ok_tests! {
     add_ints: "1 + 1", "Int(2)";
     add_strs: "'a' + 'b'", r#"Str("ab")"#;

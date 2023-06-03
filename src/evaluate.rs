@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use crate::exceptions::{exc, exc_err};
+use crate::exceptions::{Exception, InternalRunError};
 use crate::object::Object;
 use crate::run::RunResult;
 use crate::types::{Builtins, CmpOperator, Expr, ExprLoc, Function, Kwarg, Operator};
@@ -19,16 +21,17 @@ impl<'a> Evaluator<'a> {
             Expr::Name(ident) => {
                 if let Some(object) = self.namespace.get(ident.id) {
                     match object {
-                        Object::Undefined => {
-                            Err(format!("({}) name '{}' is not defined", expr_loc.position, ident.name).into())
-                        }
+                        Object::Undefined => Err(InternalRunError::Undefined(ident.name.clone().into()).into()),
                         _ => Ok(Cow::Borrowed(object)),
                     }
                 } else {
-                    Err(format!("({}) name '{}' is not defined", expr_loc.position, ident.name).into())
+                    let name = ident.name.clone();
+                    Err(Exception::NameError(name.into())
+                        .with_position(&expr_loc.position)
+                        .into())
                 }
             }
-            Expr::Call { func, args, kwargs } => self.call_function(func, args, kwargs),
+            Expr::Call { func, args, kwargs } => Ok(self.call_function(func, args, kwargs)?),
             Expr::Op { left, op, right } => self.op(left, op, right),
             Expr::CmpOp { left, op, right } => Ok(Cow::Owned(self.cmp_op(left, op, right)?.into())),
             Expr::List(elements) => {
@@ -55,15 +58,13 @@ impl<'a> Evaluator<'a> {
             Operator::Add => left_object.add(&right_object),
             Operator::Sub => left_object.sub(&right_object),
             Operator::Mod => left_object.modulo(&right_object),
-            _ => return Err(format!("Operator {op:?} not yet implemented").into()),
+            _ => return exc_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented"),
         };
         match op_object {
             Some(object) => Ok(Cow::Owned(object)),
-            None => Err(format!(
-                "({}) Cannot apply operator {left} {op} {right}",
-                left.position.extend(&right.position)
-            )
-            .into()),
+            None => Err(exc!(Exception::TypeError; "Cannot apply operator {left} {op} {right}")
+                .with_position(&left.position.extend(&right.position))
+                .into()),
         }
     }
 
@@ -77,15 +78,13 @@ impl<'a> Evaluator<'a> {
             CmpOperator::GtE => Some(left_object.ge(&right_object)),
             CmpOperator::Lt => Some(left_object.lt(&right_object)),
             CmpOperator::LtE => Some(left_object.le(&right_object)),
-            _ => return Err(format!("CmpOperator {op} not yet implemented").into()),
+            _ => return exc_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented"),
         };
         match op_object {
             Some(object) => Ok(object),
-            None => Err(format!(
-                "({}) Cannot apply comparison operator {left} {op} {right}",
-                left.position.extend(&right.position)
-            )
-            .into()),
+            None => Err(exc!(Exception::TypeError; "Cannot apply operator {left} {op} {right}")
+                .with_position(&left.position.extend(&right.position))
+                .into()),
         }
     }
 
@@ -97,7 +96,9 @@ impl<'a> Evaluator<'a> {
     ) -> RunResult<Cow<'a, Object>> {
         let builtin = match function {
             Function::Builtin(builtin) => builtin,
-            Function::Ident(_) => return Err("User defined functions not yet implemented".into()),
+            Function::Ident(_) => {
+                return exc_err!(InternalRunError::TodoError; "User defined functions not yet implemented")
+            }
         };
         match builtin {
             Builtins::Print => {
@@ -114,23 +115,21 @@ impl<'a> Evaluator<'a> {
             }
             Builtins::Range => {
                 if args.len() != 1 {
-                    Err("range() takes exactly one argument".into())
+                    exc_err!(InternalRunError::TodoError; "range() takes exactly one argument")
                 } else {
                     let object = self.evaluate(&args[0])?;
-                    match object.as_ref() {
-                        Object::Int(size) => Ok(Cow::Owned(Object::Range(*size))),
-                        _ => Err("range() argument must be an integer".into()),
-                    }
+                    let size = object.as_int()?;
+                    Ok(Cow::Owned(Object::Range(size)))
                 }
             }
             Builtins::Len => {
                 if args.len() != 1 {
-                    Err(format!("len() takes exactly exactly one argument ({} given)", args.len()).into())
+                    exc_err!(Exception::TypeError; "len() takes exactly exactly one argument ({} given)", args.len())
                 } else {
                     let object = self.evaluate(&args[0])?;
                     match object.len() {
                         Some(len) => Ok(Cow::Owned(Object::Int(len as i64))),
-                        None => Err(format!("Object of type {object} has no len()").into()),
+                        None => exc_err!(Exception::TypeError; "Object of type {} has no len()", object),
                     }
                 }
             }

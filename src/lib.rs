@@ -1,7 +1,8 @@
-mod parse_error;
 mod evaluate;
+mod exceptions;
 mod object;
 mod parse;
+mod parse_error;
 mod prepare;
 mod run;
 mod types;
@@ -10,7 +11,7 @@ pub use crate::object::Object;
 use crate::parse::parse;
 pub use crate::parse_error::{ParseError, ParseResult};
 use crate::prepare::prepare;
-use crate::run::{Frame, RunResult};
+use crate::run::{RunFrame, RunResult};
 pub use crate::types::Exit;
 use crate::types::Node;
 
@@ -37,7 +38,7 @@ impl Executor {
         for (i, input) in inputs.into_iter().enumerate() {
             namespace[i] = input;
         }
-        Frame::new(namespace).execute(&self.nodes)
+        RunFrame::new(namespace).execute(&self.nodes)
     }
 }
 

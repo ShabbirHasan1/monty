@@ -5,8 +5,8 @@ use rustpython_parser::ast::{
 use rustpython_parser::parse_program;
 
 use crate::object::Object;
-use crate::types::{CmpOperator, CodePosition, CodeRange, Expr, ExprLoc, Function, Identifier, Kwarg, Node, Operator};
 use crate::parse_error::{ParseError, ParseResult};
+use crate::types::{CmpOperator, CodePosition, CodeRange, Expr, ExprLoc, Function, Identifier, Kwarg, Node, Operator};
 
 pub(crate) fn parse(code: &str, filename: &str) -> ParseResult<Vec<Node>> {
     match parse_program(code, filename) {
@@ -81,18 +81,12 @@ impl Parser {
                 body,
                 orelse,
                 ..
-            } => {
-                let target = self.parse_expression(*target)?;
-                let iter = self.parse_expression(*iter)?;
-                let body = self.parse_statements(body)?;
-                let or_else = self.parse_statements(orelse)?;
-                Ok(Node::For {
-                    target,
-                    iter,
-                    body,
-                    or_else,
-                })
-            }
+            } => Ok(Node::For {
+                target: self.parse_identifier(*target)?,
+                iter: self.parse_expression(*iter)?,
+                body: self.parse_statements(body)?,
+                or_else: self.parse_statements(orelse)?,
+            }),
             StmtKind::AsyncFor {
                 target: _,
                 iter: _,
@@ -281,7 +275,9 @@ impl Parser {
     fn parse_identifier(&self, ast: AstExpr) -> ParseResult<Identifier> {
         match ast.node {
             ExprKind::Name { id, .. } => Ok(Identifier::from_name(id)),
-            _ => Err(ParseError::Internal(format!("Expected name, got {:?}", ast.node).into())),
+            _ => Err(ParseError::Internal(
+                format!("Expected name, got {:?}", ast.node).into(),
+            )),
         }
     }
 
@@ -306,9 +302,13 @@ impl Parser {
 
 fn first<T: std::fmt::Debug>(v: Vec<T>) -> ParseResult<T> {
     if v.len() != 1 {
-        Err(ParseError::Internal(format!("Expected 1 element, got {} (raw: {v:?})", v.len()).into()))
+        Err(ParseError::Internal(
+            format!("Expected 1 element, got {} (raw: {v:?})", v.len()).into(),
+        ))
     } else {
-        v.into_iter().next().ok_or_else(|| ParseError::Internal("Expected 1 element, got 0".into()))
+        v.into_iter()
+            .next()
+            .ok_or_else(|| ParseError::Internal("Expected 1 element, got 0".into()))
     }
 }
 
