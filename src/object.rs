@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
+use std::ptr::addr_of;
 
 use crate::exceptions::{exc_err_fmt, ExcType, SimpleException};
 use crate::heap::HeapData;
@@ -208,6 +209,7 @@ impl Object {
             Self::Range(v) => *v != 0,
             Self::Exc(_) => true,
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().bool(heap),
                 HeapData::Str(s) => !s.is_empty(),
                 HeapData::Bytes(b) => !b.is_empty(),
                 HeapData::List(items) => !items.is_empty(),
@@ -249,6 +251,7 @@ impl Object {
 
         match self {
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().len(heap),
                 HeapData::Str(s) => Some(s.len()),
                 HeapData::Bytes(b) => Some(b.len()),
                 HeapData::List(items) => Some(items.len()),
@@ -266,6 +269,7 @@ impl Object {
     pub fn repr<'h>(&self, heap: &'h Heap) -> Cow<'h, str> {
         match self {
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().repr(heap),
                 HeapData::Str(s) => string_repr(s).into(),
                 HeapData::Bytes(b) => format!("b'{b:?}'").into(),
                 HeapData::List(items) => repr_sequence('[', ']', items, heap).into(),
@@ -287,6 +291,44 @@ impl Object {
             }
         }
         self.repr(heap)
+    }
+
+    /// Returns a stable, unique identifier for this object, boxing it to the heap if necessary.
+    ///
+    /// Should match Python's `id()` function.
+    ///
+    /// For inline values (Int, Float, Range), this method allocates them to the heap on first call
+    /// and replaces `self` with an `Object::Ref` pointing to the boxed value. This ensures that
+    /// subsequent calls to `id()` or `id_or_box()` return the same stable heap address.
+    ///
+    /// Singletons (None, True, False, etc.) return constant IDs without heap allocation.
+    /// Already heap-allocated objects (Ref) return their existing ObjectId.
+    pub fn id(&mut self, heap: &mut Heap) -> usize {
+        match self {
+            // should not be used in practice
+            Self::Undefined => 0,
+            // Singletons derive their IDs by setting low bits of the heap's address
+            // This ensures uniqueness (can't collide with aligned heap allocations)
+            // while keeping addresses clearly related to the heap
+            Self::Ellipsis => heap.singleton_addr(0x1),
+            Self::None => heap.singleton_addr(0x2),
+            Self::True => heap.singleton_addr(0x3),
+            Self::False => heap.singleton_addr(0x4),
+            // Exceptions use their memory address (already stable)
+            Self::Exc(v) => addr_of!(v) as usize,
+            // Already heap-allocated, return the memory address of the HeapData
+            Self::Ref(id) => heap.get_addr(*id),
+            // Everything else (Int, Float, Range) needs to be boxed
+            _ => {
+                // Clone the current value before replacing it
+                let boxed = Box::new(self.clone());
+                let new_id = heap.allocate(HeapData::Object(boxed));
+                // Replace self with a Ref to the newly allocated heap object
+                *self = Self::Ref(new_id);
+                // Return the memory address of the heap data
+                heap.get_addr(new_id)
+            }
+        }
     }
 
     /// TODO maybe replace with TryFrom
@@ -322,7 +364,7 @@ impl Object {
     ///
     /// This method requires heap access to work with heap-allocated objects and
     /// to generate accurate error messages.
-    pub(crate) fn attr_call<'c>(&mut self, heap: &mut Heap, attr: &Attr, args: Vec<Self>) -> RunResult<'c, Object> {
+    pub fn attr_call<'c>(&mut self, heap: &mut Heap, attr: &Attr, args: Vec<Self>) -> RunResult<'c, Object> {
         use crate::heap::HeapData;
 
         match (self, attr) {
@@ -470,7 +512,7 @@ impl Object {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Attr {
+pub enum Attr {
     Append,
     Insert,
     Foobar,
@@ -508,7 +550,7 @@ macro_rules! string_replace_common {
     };
 }
 
-pub(crate) fn string_repr(s: &str) -> String {
+pub fn string_repr(s: &str) -> String {
     // Check if the string contains single quotes but not double quotes
     if s.contains('\'') && !s.contains('"') {
         // Use double quotes if string contains only single quotes
