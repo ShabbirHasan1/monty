@@ -1,8 +1,11 @@
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use crate::expressions::ExprLoc;
+use crate::heap::HeapData;
 use crate::object::{Attr, Object};
 use crate::parse::CodeRange;
 use crate::run::RunResult;
@@ -11,12 +14,13 @@ use crate::values::PyValue;
 use crate::Heap;
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum ExcType {
     ValueError,
     TypeError,
     NameError,
     AttributeError,
+    KeyError,
 }
 
 impl fmt::Display for ExcType {
@@ -34,7 +38,45 @@ impl ExcType {
             Self::TypeError => "TypeError",
             Self::NameError => "NameError",
             Self::AttributeError => "AttributeError",
+            Self::KeyError => "KeyError",
         }
+    }
+
+    #[must_use]
+    pub fn attribute_error<'c>(type_str: &str, attr: &Attr) -> RunError<'c> {
+        exc_fmt!(Self::AttributeError; "'{type_str}' object has no attribute '{attr}'").into()
+    }
+
+    #[must_use]
+    pub fn type_error_not_sub<'c>(type_str: &str) -> RunError<'c> {
+        exc_fmt!(Self::TypeError; "'{type_str}' object is not subscriptable").into()
+    }
+
+    /// Creates a TypeError for unhashable types (e.g., list, dict used as dict keys).
+    ///
+    /// This matches Python's error message: `TypeError: unhashable type: 'list'`
+    #[must_use]
+    pub fn type_error_unhashable<'c>(type_str: &str) -> RunError<'c> {
+        exc_fmt!(Self::TypeError; "unhashable type: '{type_str}'").into()
+    }
+
+    /// Creates a KeyError for a missing dict key.
+    ///
+    /// For string keys, uses the raw string value without extra quoting.
+    /// For other types, uses repr.
+    #[must_use]
+    pub fn key_error<'c>(key: &Object, heap: &Heap) -> RunError<'c> {
+        let key_str = match key {
+            Object::Ref(id) => {
+                if let HeapData::Str(s) = heap.get(*id) {
+                    s.as_str().to_owned()
+                } else {
+                    key.py_repr(heap).into_owned()
+                }
+            }
+            _ => key.py_repr(heap).into_owned(),
+        };
+        SimpleException::new(Self::KeyError, Some(key_str.into())).into()
     }
 }
 
@@ -55,14 +97,9 @@ impl FromStr for ExcType {
             "TypeError" => Ok(Self::TypeError),
             "NameError" => Ok(Self::NameError),
             "AttributeError" => Ok(Self::AttributeError),
+            "KeyError" => Ok(Self::KeyError),
             _ => Err(()),
         }
-    }
-}
-
-impl ExcType {
-    pub fn attribute_error<'c>(type_str: &str, attr: &Attr) -> RunError<'c> {
-        exc_fmt!(Self::AttributeError; "'{type_str}' object has no attribute '{attr}'").into()
     }
 }
 
@@ -86,12 +123,25 @@ impl fmt::Display for SimpleException {
 }
 
 impl SimpleException {
-    pub(crate) fn new(exc_type: ExcType, arg: Option<Cow<'static, str>>) -> Self {
+    /// Creates a new exception with the given type and optional argument message.
+    #[must_use]
+    pub fn new(exc_type: ExcType, arg: Option<Cow<'static, str>>) -> Self {
         SimpleException { exc_type, arg }
     }
 
     pub(crate) fn type_str(&self) -> &'static str {
         self.exc_type.str()
+    }
+
+    /// Computes a hash for this exception based on its type and argument.
+    ///
+    /// Used when exceptions are used as dict keys (rare but supported).
+    #[must_use]
+    pub fn py_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.exc_type.hash(&mut hasher);
+        self.arg.hash(&mut hasher);
+        hasher.finish()
     }
 
     pub(crate) fn with_frame(self, frame: StackFrame) -> ExceptionRaise {
@@ -108,6 +158,7 @@ impl SimpleException {
         }
     }
 
+    /// TODO move to `ExcType`
     pub(crate) fn operand_type_error<'c, 'd, T>(
         left: &'d ExprLoc<'c>,
         op: impl fmt::Display,

@@ -54,6 +54,9 @@ impl<'c> RunFrame<'c> {
             Node::OpAssign { target, op, object } => {
                 self.op_assign(heap, target, op, object)?;
             }
+            Node::SubscriptAssign { target, index, value } => {
+                self.subscript_assign(heap, target, index, value)?;
+            }
             Node::For {
                 target,
                 iter,
@@ -127,6 +130,30 @@ impl<'c> RunFrame<'c> {
                 Err(e.with_frame(self.stack_frame(&expr.position)).into())
             } else {
                 Ok(())
+            }
+        } else {
+            let e = SimpleException::new(ExcType::NameError, Some(target.name.clone().into()));
+            Err(e.with_frame(self.stack_frame(&target.position)).into())
+        }
+    }
+
+    fn subscript_assign(
+        &mut self,
+        heap: &mut Heap,
+        target: &Identifier<'c>,
+        index: &ExprLoc<'c>,
+        value: &ExprLoc<'c>,
+    ) -> RunResult<'c, ()> {
+        let key = self.execute_expr(heap, index)?;
+        let val = self.execute_expr(heap, value)?;
+
+        if let Some(target_object) = self.namespace.get_mut(target.id) {
+            if let Object::Ref(id) = target_object {
+                let id = *id;
+                heap.with_entry_mut(id, |heap, data| data.py_setitem(key, val, heap))
+            } else {
+                let e = exc_fmt!(ExcType::TypeError; "'{}' object does not support item assignment", target_object.py_type(heap));
+                Err(e.with_frame(self.stack_frame(&index.position)).into())
             }
         } else {
             let e = SimpleException::new(ExcType::NameError, Some(target.name.clone().into()));

@@ -1,6 +1,6 @@
 mod builtins;
 mod evaluate;
-mod exceptions;
+pub mod exceptions;
 mod exit;
 mod expressions;
 mod heap;

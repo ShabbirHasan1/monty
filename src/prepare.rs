@@ -99,7 +99,8 @@ impl Prepare {
                                     // This is transformed into a call: `raise TypeError()` so the exception
                                     // is properly instantiated before being raised.
                                     let callable = id.name.parse().map_err(|()| {
-                                        ParseError::Internal(format!("unknown function: `{}`", id.name).into())
+                                        let name = &id.name;
+                                        ParseError::Internal(format!("unknown function: `{name}`").into())
                                     })?;
                                     let expr = Expr::Call {
                                         callable,
@@ -124,6 +125,12 @@ impl Prepare {
                     let target = self.get_id(target).0;
                     let object = self.prepare_expression(object)?;
                     new_nodes.push(Node::OpAssign { target, op, object });
+                }
+                Node::SubscriptAssign { target, index, value } => {
+                    let target = self.get_id(target).0;
+                    let index = self.prepare_expression(index)?;
+                    let value = self.prepare_expression(value)?;
+                    new_nodes.push(Node::SubscriptAssign { target, index, value });
                 }
                 Node::For {
                     target,
@@ -216,6 +223,17 @@ impl Prepare {
                     .map(|e| self.prepare_expression(e))
                     .collect::<ParseResult<_>>()?;
                 Expr::Tuple(expressions)
+            }
+            Expr::Subscript { object, index } => Expr::Subscript {
+                object: Box::new(self.prepare_expression(*object)?),
+                index: Box::new(self.prepare_expression(*index)?),
+            },
+            Expr::Dict(pairs) => {
+                let prepared_pairs = pairs
+                    .into_iter()
+                    .map(|(k, v)| Ok((self.prepare_expression(k)?, self.prepare_expression(v)?)))
+                    .collect::<ParseResult<_>>()?;
+                Expr::Dict(prepared_pairs)
             }
         };
 

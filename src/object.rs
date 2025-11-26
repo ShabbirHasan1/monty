@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use crate::exceptions::{exc_err_fmt, ExcType, SimpleException};
 use crate::heap::HeapData;
@@ -129,6 +131,7 @@ impl PyValue for Object {
     fn py_add(&self, other: &Self, heap: &mut Heap) -> Option<Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Self::Int(v1 + v2)),
+            (Self::Float(v1), Self::Float(v2)) => Some(Self::Float(v1 + v2)),
             (Self::Ref(id1), Self::Ref(id2)) => heap.with_two(*id1, *id2, |heap, left, right| left.py_add(right, heap)),
             _ => None,
         }
@@ -161,7 +164,7 @@ impl PyValue for Object {
         }
     }
 
-    fn py_iadd(&mut self, other: Object, heap: &mut Heap, _self_id: Option<ObjectId>) -> Result<(), Object> {
+    fn py_iadd(&mut self, other: Self, heap: &mut Heap, _self_id: Option<ObjectId>) -> Result<(), Self> {
         match self {
             Self::Int(v1) => {
                 if let Object::Int(v2) = other {
@@ -176,6 +179,13 @@ impl PyValue for Object {
                 heap.with_entry_mut(id, |heap, data| data.py_iadd(other, heap, Some(id)))
             }
             _ => Err(other),
+        }
+    }
+
+    fn py_getitem(&self, key: &Self, heap: &Heap) -> RunResult<'static, Self> {
+        match self {
+            Object::Ref(id) => heap.get(*id).py_getitem(key, heap),
+            _ => Err(ExcType::type_error_not_sub(self.py_type(heap))),
         }
     }
 }
@@ -284,6 +294,51 @@ impl Object {
         self.id(heap) == other.id(heap)
     }
 
+    /// Computes the hash value for this object, used for dict keys.
+    ///
+    /// Returns Some(hash) for hashable types (immediate values and immutable heap types).
+    /// Returns None for unhashable types (list, dict).
+    ///
+    /// For heap-allocated objects (Ref variant), this retrieves the precomputed
+    /// cached hash. The hash is computed once during allocation for immutable types.
+    pub fn py_hash_u64(&self, heap: &Heap) -> Option<u64> {
+        match self {
+            // Immediate values can be hashed directly
+            Self::Undefined => Some(0),
+            Self::Ellipsis => Some(1),
+            Self::None => Some(2),
+            Self::Bool(b) => {
+                let mut hasher = DefaultHasher::new();
+                b.hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Int(i) => {
+                let mut hasher = DefaultHasher::new();
+                i.hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Float(f) => {
+                let mut hasher = DefaultHasher::new();
+                // Hash the bit representation of float for consistency
+                f.to_bits().hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Range(r) => {
+                let mut hasher = DefaultHasher::new();
+                r.hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Exc(e) => {
+                // Exceptions are rarely used as dict keys, but we provide a hash
+                // based on the exception type and argument for proper distribution
+                Some(e.py_hash())
+            }
+            // For heap-allocated objects, use the cached hash
+            // No cached hash means it's a mutable type (list, dict)
+            Self::Ref(id) => heap.get_cached_hash(*id),
+        }
+    }
+
     /// TODO maybe replace with TryFrom
     pub fn as_int(&self) -> RunResult<'static, i64> {
         match self {
@@ -380,6 +435,11 @@ impl Object {
 pub enum Attr {
     Append,
     Insert,
+    Get,
+    Keys,
+    Values,
+    Items,
+    Pop,
     Other(String),
 }
 
@@ -389,6 +449,11 @@ impl fmt::Display for Attr {
         match self {
             Self::Append => write!(f, "append"),
             Self::Insert => write!(f, "insert"),
+            Self::Get => write!(f, "get"),
+            Self::Keys => write!(f, "keys"),
+            Self::Values => write!(f, "values"),
+            Self::Items => write!(f, "items"),
+            Self::Pop => write!(f, "pop"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }
@@ -399,6 +464,11 @@ impl From<String> for Attr {
         match name.as_str() {
             "append" => Self::Append,
             "insert" => Self::Insert,
+            "get" => Self::Get,
+            "keys" => Self::Keys,
+            "values" => Self::Values,
+            "items" => Self::Items,
+            "pop" => Self::Pop,
             _ => Self::Other(name),
         }
     }

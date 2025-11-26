@@ -159,11 +159,22 @@ impl<'c> Parser<'c> {
     }
 
     /// `lhs = rhs` -> `lhs, rhs`
+    /// Handles both simple assignments (x = value) and subscript assignments (dict[key] = value)
     fn parse_assignment(&self, lhs: AstExpr, rhs: AstExpr) -> ParseResult<'c, Node<'c>> {
-        Ok(Node::Assign {
-            target: self.parse_identifier(lhs)?,
-            object: self.parse_expression(rhs)?,
-        })
+        // Check if this is a subscript assignment like dict[key] = value
+        if let AstExpr::Subscript(ast::ExprSubscript { value, slice, .. }) = lhs {
+            Ok(Node::SubscriptAssign {
+                target: self.parse_identifier(*value)?,
+                index: self.parse_expression(*slice)?,
+                value: self.parse_expression(rhs)?,
+            })
+        } else {
+            // Simple identifier assignment like x = value
+            Ok(Node::Assign {
+                target: self.parse_identifier(lhs)?,
+                object: self.parse_expression(rhs)?,
+            })
+        }
     }
 
     fn parse_expression(&self, expression: AstExpr) -> ParseResult<'c, ExprLoc<'c>> {
@@ -202,7 +213,20 @@ impl<'c> Parser<'c> {
             AstExpr::UnaryOp(_) => Err(ParseError::Todo("UnaryOp")),
             AstExpr::Lambda(_) => Err(ParseError::Todo("Lambda")),
             AstExpr::If(_) => Err(ParseError::Todo("IfExp")),
-            AstExpr::Dict(_) => Err(ParseError::Todo("Dict")),
+            AstExpr::Dict(ast::ExprDict { items, range, .. }) => {
+                let mut pairs = Vec::new();
+                for ast::DictItem { key, value } in items {
+                    // key is Option<Expr> - None represents ** unpacking which we don't support yet
+                    if let Some(key_expr_ast) = key {
+                        let key_expr = self.parse_expression(key_expr_ast)?;
+                        let value_expr = self.parse_expression(value)?;
+                        pairs.push((key_expr, value_expr));
+                    } else {
+                        return Err(ParseError::Todo("Dict unpacking (**kwargs)"));
+                    }
+                }
+                Ok(ExprLoc::new(self.convert_range(range), Expr::Dict(pairs)))
+            }
             AstExpr::Set(_) => Err(ParseError::Todo("Set")),
             AstExpr::ListComp(_) => Err(ParseError::Todo("ListComp")),
             AstExpr::SetComp(_) => Err(ParseError::Todo("SetComp")),
@@ -301,7 +325,16 @@ impl<'c> Parser<'c> {
                 Ok(ExprLoc::new(self.convert_range(range), Expr::Constant(Const::Ellipsis)))
             }
             AstExpr::Attribute(_) => Err(ParseError::Todo("Attribute")),
-            AstExpr::Subscript(_) => Err(ParseError::Todo("Subscript")),
+            AstExpr::Subscript(ast::ExprSubscript {
+                value, slice, range, ..
+            }) => {
+                let object = Box::new(self.parse_expression(*value)?);
+                let index = Box::new(self.parse_expression(*slice)?);
+                Ok(ExprLoc::new(
+                    self.convert_range(range),
+                    Expr::Subscript { object, index },
+                ))
+            }
             AstExpr::Starred(_) => Err(ParseError::Todo("Starred")),
             AstExpr::Name(ast::ExprName { id, range, .. }) => Ok(ExprLoc::new(
                 self.convert_range(range),

@@ -6,12 +6,14 @@
 /// The `AbstractValue` trait provides a common interface for all heap-allocated
 /// types, enabling efficient dispatch via `enum_dispatch`.
 pub mod bytes;
+pub mod dict;
 pub mod list;
 pub mod py_value;
 pub mod str;
 pub mod tuple;
 
 pub use bytes::Bytes;
+pub use dict::Dict;
 pub use list::List;
 pub use py_value::PyValue;
 pub use str::Str;

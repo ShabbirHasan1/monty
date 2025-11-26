@@ -1,10 +1,12 @@
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use crate::object::{Attr, Object};
 use crate::run::RunResult;
 // Import AbstractValue trait for enum_dispatch to work
 use crate::values::PyValue;
-use crate::values::{Bytes, List, Str, Tuple};
+use crate::values::{Bytes, Dict, List, Str, Tuple};
 
 /// Unique identifier for objects stored inside the heap arena.
 pub type ObjectId = usize;
@@ -26,7 +28,45 @@ pub enum HeapData {
     Bytes(Bytes),
     List(List),
     Tuple(Tuple),
+    Dict(Dict),
     // TODO: support arbitrary classes
+}
+
+impl HeapData {
+    /// Computes hash for immutable heap types that can be used as dict keys.
+    ///
+    /// Returns Some(hash) for immutable types (Str, Bytes, Tuple of hashables).
+    /// Returns None for mutable types (List, Object) which cannot be dict keys.
+    ///
+    /// This is called during heap allocation to precompute and cache hashes,
+    /// avoiding the need to access the heap during hash operations.
+    fn compute_hash_if_immutable(&self, heap: &Heap) -> Option<u64> {
+        match self {
+            Self::Str(s) => {
+                let mut hasher = DefaultHasher::new();
+                s.as_str().hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Bytes(b) => {
+                let mut hasher = DefaultHasher::new();
+                b.as_slice().hash(&mut hasher);
+                Some(hasher.finish())
+            }
+            Self::Tuple(t) => {
+                // Tuple is hashable only if all elements are hashable
+                let mut hasher = DefaultHasher::new();
+                for obj in t.as_vec() {
+                    match obj.py_hash_u64(heap) {
+                        Some(h) => h.hash(&mut hasher),
+                        None => return None, // Contains unhashable element
+                    }
+                }
+                Some(hasher.finish())
+            }
+            // Mutable types cannot be hashed
+            Self::List(_) | Self::Dict(_) | Self::Object(_) => None,
+        }
+    }
 }
 
 /// Manual implementation of AbstractValue dispatch for HeapData.
@@ -41,6 +81,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_type(heap),
             Self::List(l) => l.py_type(heap),
             Self::Tuple(t) => t.py_type(heap),
+            Self::Dict(d) => d.py_type(heap),
         }
     }
 
@@ -51,6 +92,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => PyValue::py_len(b, heap),
             Self::List(l) => PyValue::py_len(l, heap),
             Self::Tuple(t) => PyValue::py_len(t, heap),
+            Self::Dict(d) => PyValue::py_len(d, heap),
         }
     }
 
@@ -61,6 +103,7 @@ impl PyValue for HeapData {
             (Self::Bytes(a), Self::Bytes(b)) => a.py_eq(b, heap),
             (Self::List(a), Self::List(b)) => a.py_eq(b, heap),
             (Self::Tuple(a), Self::Tuple(b)) => a.py_eq(b, heap),
+            (Self::Dict(a), Self::Dict(b)) => a.py_eq(b, heap),
             _ => false, // Different types are never equal
         }
     }
@@ -72,6 +115,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_dec_ref_ids(stack),
             Self::List(l) => l.py_dec_ref_ids(stack),
             Self::Tuple(t) => t.py_dec_ref_ids(stack),
+            Self::Dict(d) => d.py_dec_ref_ids(stack),
         }
     }
 
@@ -82,6 +126,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_bool(heap),
             Self::List(l) => l.py_bool(heap),
             Self::Tuple(t) => t.py_bool(heap),
+            Self::Dict(d) => d.py_bool(heap),
         }
     }
 
@@ -92,6 +137,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_repr(heap),
             Self::List(l) => l.py_repr(heap),
             Self::Tuple(t) => t.py_repr(heap),
+            Self::Dict(d) => d.py_repr(heap),
         }
     }
 
@@ -102,6 +148,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_str(heap),
             Self::List(l) => l.py_str(heap),
             Self::Tuple(t) => t.py_str(heap),
+            Self::Dict(d) => d.py_str(heap),
         }
     }
 
@@ -112,6 +159,7 @@ impl PyValue for HeapData {
             (Self::Bytes(a), Self::Bytes(b)) => a.py_add(b, heap),
             (Self::List(a), Self::List(b)) => a.py_add(b, heap),
             (Self::Tuple(a), Self::Tuple(b)) => a.py_add(b, heap),
+            (Self::Dict(a), Self::Dict(b)) => a.py_add(b, heap),
             _ => None,
         }
     }
@@ -123,6 +171,7 @@ impl PyValue for HeapData {
             (Self::Bytes(a), Self::Bytes(b)) => a.py_sub(b, heap),
             (Self::List(a), Self::List(b)) => a.py_sub(b, heap),
             (Self::Tuple(a), Self::Tuple(b)) => a.py_sub(b, heap),
+            (Self::Dict(a), Self::Dict(b)) => a.py_sub(b, heap),
             _ => None,
         }
     }
@@ -134,6 +183,7 @@ impl PyValue for HeapData {
             (Self::Bytes(a), Self::Bytes(b)) => a.py_mod(b),
             (Self::List(a), Self::List(b)) => a.py_mod(b),
             (Self::Tuple(a), Self::Tuple(b)) => a.py_mod(b),
+            (Self::Dict(a), Self::Dict(b)) => a.py_mod(b),
             _ => None,
         }
     }
@@ -145,6 +195,7 @@ impl PyValue for HeapData {
             (Self::Bytes(a), Self::Bytes(b)) => a.py_mod_eq(b, right_value),
             (Self::List(a), Self::List(b)) => a.py_mod_eq(b, right_value),
             (Self::Tuple(a), Self::Tuple(b)) => a.py_mod_eq(b, right_value),
+            (Self::Dict(a), Self::Dict(b)) => a.py_mod_eq(b, right_value),
             _ => None,
         }
     }
@@ -156,6 +207,7 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_iadd(other, heap, self_id),
             Self::List(l) => l.py_iadd(other, heap, self_id),
             Self::Tuple(t) => t.py_iadd(other, heap, self_id),
+            Self::Dict(d) => d.py_iadd(other, heap, self_id),
         }
     }
 
@@ -166,15 +218,44 @@ impl PyValue for HeapData {
             Self::Bytes(b) => b.py_call_attr(heap, attr, args),
             Self::List(l) => l.py_call_attr(heap, attr, args),
             Self::Tuple(t) => t.py_call_attr(heap, attr, args),
+            Self::Dict(d) => d.py_call_attr(heap, attr, args),
+        }
+    }
+
+    fn py_getitem(&self, key: &Object, heap: &Heap) -> RunResult<'static, Object> {
+        match self {
+            Self::Object(obj) => obj.py_getitem(key, heap),
+            Self::Str(s) => s.py_getitem(key, heap),
+            Self::Bytes(b) => b.py_getitem(key, heap),
+            Self::List(l) => l.py_getitem(key, heap),
+            Self::Tuple(t) => t.py_getitem(key, heap),
+            Self::Dict(d) => d.py_getitem(key, heap),
+        }
+    }
+
+    fn py_setitem(&mut self, key: Object, value: Object, heap: &mut Heap) -> RunResult<'static, ()> {
+        match self {
+            Self::Object(obj) => obj.py_setitem(key, value, heap),
+            Self::Str(s) => s.py_setitem(key, value, heap),
+            Self::Bytes(b) => b.py_setitem(key, value, heap),
+            Self::List(l) => l.py_setitem(key, value, heap),
+            Self::Tuple(t) => t.py_setitem(key, value, heap),
+            Self::Dict(d) => d.py_setitem(key, value, heap),
         }
     }
 }
 
 /// A single entry inside the heap arena, storing refcount and payload.
+///
+/// The `cached_hash` field is used to store precomputed hashes for immutable types
+/// (Str, Bytes, Tuple) to allow them to be used as dict keys. Mutable types (List, Dict)
+/// have `cached_hash = None` and will raise TypeError if used as dict keys.
 #[derive(Debug)]
 struct HeapObject {
     refcount: usize,
     data: HeapData,
+    /// Cached hash value for immutable types, None for mutable types
+    cached_hash: Option<u64>,
 }
 
 /// Reference-counted arena that backs all heap-only runtime objects.
@@ -190,9 +271,18 @@ pub struct Heap {
 
 impl Heap {
     /// Allocates a new heap object, returning the fresh identifier.
+    ///
+    /// For immutable types (Str, Bytes, Tuple), this precomputes and caches
+    /// the hash value so they can be used as dict keys. Mutable types (List)
+    /// get cached_hash = None.
     pub fn allocate(&mut self, data: HeapData) -> ObjectId {
+        let cached_hash = data.compute_hash_if_immutable(self);
         let id = self.objects.len();
-        self.objects.push(Some(HeapObject { refcount: 1, data }));
+        self.objects.push(Some(HeapObject {
+            refcount: 1,
+            data,
+            cached_hash,
+        }));
         id
     }
 
@@ -257,6 +347,22 @@ impl Heap {
             .as_mut()
             .expect("Heap::get_mut: object already freed")
             .data
+    }
+
+    /// Returns the cached hash for the heap object at the given ID.
+    ///
+    /// Returns Some(hash) for immutable types, None for mutable types.
+    ///
+    /// # Panics
+    /// Panics if the object ID is invalid or the object has already been freed.
+    #[must_use]
+    pub fn get_cached_hash(&self, id: ObjectId) -> Option<u64> {
+        self.objects
+            .get(id)
+            .expect("Heap::get_cached_hash: slot missing")
+            .as_ref()
+            .expect("Heap::get_cached_hash: object already freed")
+            .cached_hash
     }
 
     /// Calls an attribute on the heap object at `id` while temporarily taking ownership

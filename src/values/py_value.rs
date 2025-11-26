@@ -92,4 +92,26 @@ pub trait PyValue {
     fn py_call_attr<'c>(&mut self, heap: &mut Heap, attr: &Attr, _args: Vec<Object>) -> RunResult<'c, Object> {
         Err(ExcType::attribute_error(self.py_type(heap), attr))
     }
+
+    /// Python subscript get operation (`__getitem__`), e.g., `d[key]`.
+    ///
+    /// Returns the value associated with the key, or an error if the key doesn't exist
+    /// or the type doesn't support subscripting.
+    ///
+    /// Default implementation returns TypeError.
+    fn py_getitem(&self, _key: &Object, heap: &Heap) -> RunResult<'static, Object> {
+        Err(ExcType::type_error_not_sub(self.py_type(heap)))
+    }
+
+    /// Python subscript set operation (`__setitem__`), e.g., `d[key] = value`.
+    ///
+    /// Sets the value associated with the key, or returns an error if the key is invalid
+    /// or the type doesn't support subscript assignment.
+    ///
+    /// Default implementation returns TypeError.
+    fn py_setitem(&mut self, _key: Object, _value: Object, heap: &mut Heap) -> RunResult<'static, ()> {
+        Err(ExcType::TypeError).map_err(|e| {
+            crate::exceptions::exc_fmt!(e; "'{}' object does not support item assignment", self.py_type(heap)).into()
+        })
+    }
 }

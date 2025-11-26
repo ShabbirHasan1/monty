@@ -4,7 +4,7 @@ use crate::heap::Heap;
 use crate::object::{Attr, Object};
 use crate::operators::{CmpOperator, Operator};
 use crate::run::RunResult;
-use crate::values::{List, PyValue};
+use crate::values::{Dict, List, PyValue};
 use crate::HeapData;
 
 /// Evaluates an expression node and returns a value.
@@ -57,6 +57,22 @@ pub(crate) fn evaluate_use<'c, 'd>(
             let object_id = heap.allocate(HeapData::Tuple(objects));
             Ok(Object::Ref(object_id))
         }
+        Expr::Subscript { object, index } => {
+            let obj = evaluate_use(namespace, heap, object)?;
+            let key = evaluate_use(namespace, heap, index)?;
+            obj.py_getitem(&key, heap)
+        }
+        Expr::Dict(pairs) => {
+            let mut eval_pairs = Vec::new();
+            for (key_expr, value_expr) in pairs {
+                let key = evaluate_use(namespace, heap, key_expr)?;
+                let value = evaluate_use(namespace, heap, value_expr)?;
+                eval_pairs.push((key, value));
+            }
+            let dict = Dict::from_pairs(eval_pairs, heap)?;
+            let dict_id = heap.allocate(HeapData::Dict(dict));
+            Ok(Object::Ref(dict_id))
+        }
     }
 }
 
@@ -103,6 +119,18 @@ pub(crate) fn evaluate_discard<'c, 'd>(
         Expr::Tuple(elements) => {
             for el in elements {
                 evaluate_discard(namespace, heap, el)?;
+            }
+            Ok(())
+        }
+        Expr::Subscript { object, index } => {
+            evaluate_discard(namespace, heap, object)?;
+            evaluate_discard(namespace, heap, index)?;
+            Ok(())
+        }
+        Expr::Dict(pairs) => {
+            for (key_expr, value_expr) in pairs {
+                evaluate_discard(namespace, heap, key_expr)?;
+                evaluate_discard(namespace, heap, value_expr)?;
             }
             Ok(())
         }

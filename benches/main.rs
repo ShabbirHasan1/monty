@@ -107,7 +107,9 @@ fn loop_mod_13_cpython(bench: &mut Bencher) {
 fn end_to_end_monty(bench: &mut Bencher) {
     bench.iter(|| {
         let mut ex = Executor::new(black_box("1 + 2"), "test.py", &[]).unwrap();
-        black_box(ex.run(vec![]).unwrap());
+        let r = ex.run(vec![]).unwrap();
+        let int_value: i64 = (&r.value().unwrap()).try_into().unwrap();
+        black_box(int_value);
     });
 }
 

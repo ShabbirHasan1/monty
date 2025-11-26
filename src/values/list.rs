@@ -194,7 +194,7 @@ impl PyValue for List {
                 let item = args_iter.next().unwrap();
                 Ok(self.insert(heap, index, item))
             }
-            Attr::Other(_) => {
+            Attr::Get | Attr::Keys | Attr::Values | Attr::Items | Attr::Pop | Attr::Other(_) => {
                 exc_err_fmt!(
                     ExcType::AttributeError;
                     "'list' object has no attribute '{}'",

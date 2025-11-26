@@ -45,6 +45,14 @@ cargo test execute_ok_add_ints
 cargo run -- <file.py>
 ```
 
+## Exception
+
+It's important that exceptions raised/returned by this library match those raised by Python.
+
+Wherever you see an Exception with a repeated message, create a dedicated method to create that exception `src/exceptions.rs`.
+
+When writing exception messages, always check `src/exceptions.rs` for existing methods to generate that message.
+
 ## Code style
 
 Avoid local imports, unless there's a very good reason, all imports should be at the top of the file.

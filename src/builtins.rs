@@ -16,6 +16,7 @@ pub(crate) enum Builtins {
     Repr,
     Id,
     Range,
+    Hash,
 }
 
 /// Parses a builtin function from its string representation.
@@ -37,6 +38,7 @@ impl FromStr for Builtins {
             "repr" => Ok(Self::Repr),
             "id" => Ok(Self::Id),
             "range" => Ok(Self::Range),
+            "hash" => Ok(Self::Hash),
             _ => Err(()),
         }
     }
@@ -101,6 +103,16 @@ impl Builtins {
                     internal_err!(InternalRunError::TodoError; "range() takes exactly one argument")
                 }
             }
+            Self::Hash => {
+                if args.len() != 1 {
+                    return exc_err_fmt!(ExcType::TypeError; "hash() takes exactly one argument ({} given)", args.len());
+                }
+                let object = &args[0];
+                match object.py_hash_u64(heap) {
+                    Some(hash) => Ok(Object::Int(hash as i64)),
+                    None => Err(ExcType::type_error_unhashable(object.py_type(heap))),
+                }
+            }
         }
     }
 
@@ -113,6 +125,7 @@ impl Builtins {
             Self::Repr => "repr",
             Self::Id => "id",
             Self::Range => "range",
+            Self::Hash => "hash",
         }
     }
 }

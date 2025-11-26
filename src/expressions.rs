@@ -102,6 +102,11 @@ pub(crate) enum Expr<'c> {
     },
     List(Vec<ExprLoc<'c>>),
     Tuple(Vec<ExprLoc<'c>>),
+    Subscript {
+        object: Box<ExprLoc<'c>>,
+        index: Box<ExprLoc<'c>>,
+    },
+    Dict(Vec<(ExprLoc<'c>, ExprLoc<'c>)>),
 }
 
 impl fmt::Display for Expr<'_> {
@@ -134,6 +139,22 @@ impl fmt::Display for Expr<'_> {
                     "({})",
                     itms.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 )
+            }
+            Self::Subscript { object, index } => write!(f, "{object}[{index}]"),
+            Self::Dict(pairs) => {
+                if pairs.is_empty() {
+                    write!(f, "{{}}")
+                } else {
+                    write!(
+                        f,
+                        "{{{}}}",
+                        pairs
+                            .iter()
+                            .map(|(k, v)| format!("{k}: {v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
             }
         }
     }
@@ -276,6 +297,11 @@ pub(crate) enum Node<'c> {
         target: Identifier<'c>,
         op: Operator,
         object: ExprLoc<'c>,
+    },
+    SubscriptAssign {
+        target: Identifier<'c>,
+        index: ExprLoc<'c>,
+        value: ExprLoc<'c>,
     },
     For {
         target: Identifier<'c>,
