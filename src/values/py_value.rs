@@ -7,6 +7,7 @@
 /// The trait is designed to work with `enum_dispatch` for efficient virtual
 /// dispatch on `HeapData` without boxing overhead.
 use std::borrow::Cow;
+use std::cmp::Ordering;
 
 use crate::args::ArgObjects;
 use crate::exceptions::ExcType;
@@ -25,25 +26,34 @@ use crate::run::RunResult;
 ///
 /// The lifetime `'e` represents the lifetime of borrowed data (e.g., interned strings)
 /// that may be contained within Objects.
-pub trait PyValue<'e> {
+pub trait PyValue<'c, 'e> {
     /// Returns the Python type name for this value (e.g., "list", "str").
     ///
     /// Used for error messages and the `type()` builtin.
     /// Takes heap reference for cases where nested Object lookups are needed.
-    fn py_type(&self, heap: &Heap<'e>) -> &'static str;
+    fn py_type(&self, heap: &Heap<'c, 'e>) -> &'static str;
 
     /// Returns the number of elements in this container.
     ///
     /// For strings, returns the number of bytes (not Unicode codepoints).
     /// Returns `None` if the type doesn't support `len()`.
-    fn py_len(&self, heap: &Heap<'e>) -> Option<usize>;
+    fn py_len(&self, heap: &Heap<'c, 'e>) -> Option<usize>;
 
     /// Python equality comparison (`==`).
     ///
     /// For containers, this performs element-wise comparison using the heap
     /// to resolve nested references. Takes `&mut Heap` to allow lazy hash
     /// computation for dict key lookups.
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'e>) -> bool;
+    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool;
+
+    /// Python comparison (`<`, `>`, etc.).
+    ///
+    /// For containers, this performs element-wise comparison using the heap
+    /// to resolve nested references. Takes `&mut Heap` to allow lazy hash
+    /// computation for dict key lookups.
+    fn py_cmp(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Ordering> {
+        None
+    }
 
     /// Pushes any contained `ObjectId`s onto the stack for reference counting.
     ///
@@ -54,30 +64,30 @@ pub trait PyValue<'e> {
     /// Returns the truthiness of the value following Python semantics.
     ///
     /// Container types should typically report `false` when empty.
-    fn py_bool(&self, heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, heap: &Heap<'c, 'e>) -> bool {
         self.py_len(heap) != Some(0)
     }
 
     /// Returns the Python `repr()` string for this value.
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'e>) -> Cow<'a, str>;
+    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str>;
 
     /// Returns the Python `str()` string for this value.
-    fn py_str<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_str<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         self.py_repr(heap)
     }
 
     /// Python addition (`__add__`).
-    fn py_add(&self, _other: &Self, _heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_add(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         None
     }
 
     /// Python subtraction (`__sub__`).
-    fn py_sub(&self, _other: &Self, _heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_sub(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         None
     }
 
     /// Python modulus (`__mod__`).
-    fn py_mod(&self, _other: &Self) -> Option<Object<'e>> {
+    fn py_mod(&self, _other: &Self) -> Option<Object<'c, 'e>> {
         None
     }
 
@@ -91,7 +101,7 @@ pub trait PyValue<'e> {
     /// # Returns
     ///
     /// Returns `true` if the operation was successful, `false` otherwise.
-    fn py_iadd(&mut self, _other: Object<'e>, _heap: &mut Heap<'e>, _self_id: Option<ObjectId>) -> bool {
+    fn py_iadd(&mut self, _other: Object<'c, 'e>, _heap: &mut Heap<'c, 'e>, _self_id: Option<ObjectId>) -> bool {
         false
     }
 
@@ -100,10 +110,10 @@ pub trait PyValue<'e> {
     /// Returns an error if the attribute doesn't exist or the arguments are invalid.
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        _args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        _args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         Err(ExcType::attribute_error(self.py_type(heap), attr))
     }
 
@@ -116,7 +126,7 @@ pub trait PyValue<'e> {
     /// the returned value.
     ///
     /// Default implementation returns TypeError.
-    fn py_getitem(&self, _key: &Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, Object<'e>> {
+    fn py_getitem(&self, _key: &Object<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Object<'c, 'e>> {
         Err(ExcType::type_error_not_sub(self.py_type(heap)))
     }
 
@@ -126,9 +136,24 @@ pub trait PyValue<'e> {
     /// or the type doesn't support subscript assignment.
     ///
     /// Default implementation returns TypeError.
-    fn py_setitem(&mut self, _key: Object<'e>, _value: Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, ()> {
+    fn py_setitem(
+        &mut self,
+        _key: Object<'c, 'e>,
+        _value: Object<'c, 'e>,
+        heap: &mut Heap<'c, 'e>,
+    ) -> RunResult<'c, ()> {
         Err(ExcType::TypeError).map_err(|e| {
             crate::exceptions::exc_fmt!(e; "'{}' object does not support item assignment", self.py_type(heap)).into()
         })
     }
+
+    // /// Python call operation (`__call__`), e.g., `func(args)`.
+    // ///
+    // /// Returns `Some(result)` if this object is callable, `None` if not callable.
+    // /// The caller should raise a TypeError if this returns `None`.
+    // ///
+    // /// Default implementation returns `None` to indicate the object is not callable.
+    // fn py_call(&self, _heap: &mut Heap<'c, 'e>, _args: ArgObjects<'c, 'e>) -> Option<RunResult<'c, Object<'c, 'e>>> {
+    //     None
+    // }
 }

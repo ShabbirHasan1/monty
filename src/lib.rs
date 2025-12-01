@@ -1,5 +1,6 @@
 mod args;
 mod builtins;
+mod callable;
 mod evaluate;
 pub mod exceptions;
 mod exit;
@@ -65,7 +66,7 @@ impl<'c> Executor<'c> {
     ///
     /// # Arguments
     /// * `inputs` - Values to fill the first N slots of the namespace (e.g., function parameters)
-    pub fn run<'e>(&'e self, inputs: Vec<Object<'e>>) -> Result<Exit<'c, 'e>, InternalRunError> {
+    pub fn run<'e>(&'e self, inputs: Vec<Object<'c, 'e>>) -> Result<Exit<'c, 'e>, InternalRunError> {
         let namespace = self.prepare_namespace(inputs)?;
         let mut heap = Heap::default();
 
@@ -97,7 +98,7 @@ impl<'c> Executor<'c> {
     #[cfg(feature = "ref-counting")]
     pub fn run_ref_counts<'e>(
         &'e self,
-        inputs: Vec<Object<'e>>,
+        inputs: Vec<Object<'c, 'e>>,
     ) -> Result<(Exit<'c, 'e>, (HashMap<String, usize>, usize, usize)), InternalRunError> {
         use std::collections::HashSet;
 
@@ -134,13 +135,13 @@ impl<'c> Executor<'c> {
     /// Prepares the namespace for execution by filling input slots and padding with Undefined.
     ///
     /// Returns the prepared namespace or an error if there are too many inputs.
-    fn prepare_namespace<'e>(&self, inputs: Vec<Object<'e>>) -> Result<Vec<Object<'e>>, InternalRunError> {
+    fn prepare_namespace<'e>(&self, inputs: Vec<Object<'c, 'e>>) -> Result<Vec<Object<'c, 'e>>, InternalRunError> {
         let Some(extra) = self.namespace_size.checked_sub(inputs.len()) else {
             return Err(InternalRunError::Error(
                 format!("input length should be <={}", self.namespace_size).into(),
             ));
         };
-        let mut namespace: Vec<Object<'e>> = inputs;
+        let mut namespace: Vec<Object<'c, 'e>> = inputs;
         if extra > 0 {
             namespace.extend((0..extra).map(|_| Object::Undefined));
         }

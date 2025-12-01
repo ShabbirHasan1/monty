@@ -63,16 +63,16 @@ impl std::ops::Deref for Str {
     }
 }
 
-impl<'e> PyValue<'e> for Str {
-    fn py_type(&self, _heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for Str {
+    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
         "str"
     }
 
-    fn py_len(&self, _heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_eq(&self, other: &Self, _heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> bool {
         self.0 == other.0
     }
 
@@ -81,25 +81,25 @@ impl<'e> PyValue<'e> for Str {
         // No-op: strings don't hold Object references
     }
 
-    fn py_bool(&self, _heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         Cow::Owned(string_repr(&self.0))
     }
 
-    fn py_str<'a>(&'a self, _heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_str<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         self.0.as_str().into()
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         let result = format!("{}{}", self.0, other.0);
         let id = heap.allocate(HeapData::Str(result.into()));
         Some(Object::Ref(id))
     }
 
-    fn py_iadd(&mut self, other: Object<'e>, heap: &mut Heap<'e>, self_id: Option<ObjectId>) -> bool {
+    fn py_iadd(&mut self, other: Object<'c, 'e>, heap: &mut Heap<'c, 'e>, self_id: Option<ObjectId>) -> bool {
         match other {
             Object::Ref(other_id) => {
                 if Some(other_id) == self_id {
@@ -119,10 +119,10 @@ impl<'e> PyValue<'e> for Str {
 
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        _args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        _args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         Err(ExcType::attribute_error(self.py_type(heap), attr))
     }
 }

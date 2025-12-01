@@ -20,18 +20,18 @@ pub type ObjectId = usize;
 /// Note: The `Object` variant is special - it wraps boxed immediate values
 /// that need heap identity (e.g., when `id()` is called on an int).
 #[derive(Debug)]
-pub enum HeapData<'e> {
+pub enum HeapData<'c, 'e> {
     /// Object in the heap is used when calculating the id of an object to provide it with a unique identity.
-    Object(Object<'e>),
+    Object(Object<'c, 'e>),
     Str(Str),
     Bytes(Bytes),
-    List(List<'e>),
-    Tuple(Tuple<'e>),
-    Dict(Dict<'e>),
+    List(List<'c, 'e>),
+    Tuple(Tuple<'c, 'e>),
+    Dict(Dict<'c, 'e>),
     // TODO: support arbitrary classes
 }
 
-impl<'e> HeapData<'e> {
+impl<'c, 'e> HeapData<'c, 'e> {
     /// Computes hash for immutable heap types that can be used as dict keys.
     ///
     /// Returns Some(hash) for immutable types (Str, Bytes, Tuple of hashables).
@@ -39,7 +39,7 @@ impl<'e> HeapData<'e> {
     ///
     /// This is called lazily when the object is first used as a dict key,
     /// avoiding unnecessary hash computation for objects that are never used as keys.
-    fn compute_hash_if_immutable(&self, heap: &mut Heap<'e>) -> Option<u64> {
+    fn compute_hash_if_immutable(&self, heap: &mut Heap<'c, 'e>) -> Option<u64> {
         match self {
             Self::Str(s) => {
                 let mut hasher = DefaultHasher::new();
@@ -72,8 +72,8 @@ impl<'e> HeapData<'e> {
 ///
 /// This provides efficient dispatch without boxing overhead by matching on
 /// the enum variant and delegating to the inner type's implementation.
-impl<'e> PyValue<'e> for HeapData<'e> {
-    fn py_type(&self, heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for HeapData<'c, 'e> {
+    fn py_type(&self, heap: &Heap<'c, 'e>) -> &'static str {
         match self {
             Self::Object(obj) => obj.py_type(heap),
             Self::Str(s) => s.py_type(heap),
@@ -84,7 +84,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_len(&self, heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, heap: &Heap<'c, 'e>) -> Option<usize> {
         match self {
             Self::Object(obj) => PyValue::py_len(obj, heap),
             Self::Str(s) => PyValue::py_len(s, heap),
@@ -95,7 +95,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
         match (self, other) {
             (Self::Object(a), Self::Object(b)) => a.py_eq(b, heap),
             (Self::Str(a), Self::Str(b)) => a.py_eq(b, heap),
@@ -118,7 +118,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_bool(&self, heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, heap: &Heap<'c, 'e>) -> bool {
         match self {
             Self::Object(obj) => obj.py_bool(heap),
             Self::Str(s) => s.py_bool(heap),
@@ -129,7 +129,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         match self {
             Self::Object(obj) => obj.py_repr(heap),
             Self::Str(s) => s.py_repr(heap),
@@ -140,7 +140,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_str<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_str<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         match self {
             Self::Object(obj) => obj.py_str(heap),
             Self::Str(s) => s.py_str(heap),
@@ -151,7 +151,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         match (self, other) {
             (Self::Object(a), Self::Object(b)) => a.py_add(b, heap),
             (Self::Str(a), Self::Str(b)) => a.py_add(b, heap),
@@ -163,7 +163,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_sub(&self, other: &Self, heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_sub(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         match (self, other) {
             (Self::Object(a), Self::Object(b)) => a.py_sub(b, heap),
             (Self::Str(a), Self::Str(b)) => a.py_sub(b, heap),
@@ -175,7 +175,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_mod(&self, other: &Self) -> Option<Object<'e>> {
+    fn py_mod(&self, other: &Self) -> Option<Object<'c, 'e>> {
         match (self, other) {
             (Self::Object(a), Self::Object(b)) => a.py_mod(b),
             (Self::Str(a), Self::Str(b)) => a.py_mod(b),
@@ -199,7 +199,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_iadd(&mut self, other: Object<'e>, heap: &mut Heap<'e>, self_id: Option<ObjectId>) -> bool {
+    fn py_iadd(&mut self, other: Object<'c, 'e>, heap: &mut Heap<'c, 'e>, self_id: Option<ObjectId>) -> bool {
         match self {
             Self::Object(obj) => obj.py_iadd(other, heap, self_id),
             Self::Str(s) => s.py_iadd(other, heap, self_id),
@@ -212,10 +212,10 @@ impl<'e> PyValue<'e> for HeapData<'e> {
 
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         match self {
             Self::Object(obj) => obj.py_call_attr(heap, attr, args),
             Self::Str(s) => s.py_call_attr(heap, attr, args),
@@ -226,7 +226,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_getitem(&self, key: &Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, Object<'e>> {
+    fn py_getitem(&self, key: &Object<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Object<'c, 'e>> {
         match self {
             Self::Object(obj) => obj.py_getitem(key, heap),
             Self::Str(s) => s.py_getitem(key, heap),
@@ -237,7 +237,7 @@ impl<'e> PyValue<'e> for HeapData<'e> {
         }
     }
 
-    fn py_setitem(&mut self, key: Object<'e>, value: Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, ()> {
+    fn py_setitem(&mut self, key: Object<'c, 'e>, value: Object<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, ()> {
         match self {
             Self::Object(obj) => obj.py_setitem(key, value, heap),
             Self::Str(s) => s.py_setitem(key, value, heap),
@@ -261,7 +261,7 @@ enum HashState {
 }
 
 impl HashState {
-    fn for_data(data: &HeapData<'_>) -> Self {
+    fn for_data(data: &HeapData<'_, '_>) -> Self {
         match data {
             HeapData::Str(_) | HeapData::Bytes(_) | HeapData::Tuple(_) => Self::Unknown,
             _ => Self::Unhashable,
@@ -281,10 +281,10 @@ impl HashState {
 /// then restore the data. This avoids unsafe code while keeping `refcount` accessible
 /// for `inc_ref`/`dec_ref` during the borrow.
 #[derive(Debug)]
-struct HeapObject<'e> {
+struct HeapObject<'c, 'e> {
     refcount: usize,
     /// The payload data. Temporarily `None` while borrowed via `with_entry_mut`/`call_attr`.
-    data: Option<HeapData<'e>>,
+    data: Option<HeapData<'c, 'e>>,
     /// Current hashing status / cached hash value
     hash_state: HashState,
 }
@@ -296,8 +296,8 @@ struct HeapObject<'e> {
 /// simple and avoids the need for generation counters while we're still
 /// building out semantics.
 #[derive(Debug, Default)]
-pub struct Heap<'e> {
-    objects: Vec<Option<HeapObject<'e>>>,
+pub struct Heap<'c, 'e> {
+    objects: Vec<Option<HeapObject<'c, 'e>>>,
 }
 
 macro_rules! take_data {
@@ -326,13 +326,13 @@ macro_rules! restore_data {
     }};
 }
 
-impl<'e> Heap<'e> {
+impl<'c, 'e> Heap<'c, 'e> {
     /// Allocates a new heap object, returning the fresh identifier.
     ///
     /// Hash computation is deferred until the object is used as a dict key
     /// (via `get_or_compute_hash`). This avoids computing hashes for objects
     /// that are never used as dict keys, improving allocation performance.
-    pub fn allocate(&mut self, data: HeapData<'e>) -> ObjectId {
+    pub fn allocate(&mut self, data: HeapData<'c, 'e>) -> ObjectId {
         let id = self.objects.len();
         let hash_state = HashState::for_data(&data);
         self.objects.push(Some(HeapObject {
@@ -387,7 +387,7 @@ impl<'e> Heap<'e> {
     /// Panics if the object ID is invalid, the object has already been freed,
     /// or the data is currently borrowed via `with_entry_mut`/`call_attr`.
     #[must_use]
-    pub fn get(&self, id: ObjectId) -> &HeapData<'_> {
+    pub fn get(&self, id: ObjectId) -> &HeapData<'c, 'e> {
         self.objects
             .get(id)
             .expect("Heap::get: slot missing")
@@ -403,7 +403,7 @@ impl<'e> Heap<'e> {
     /// # Panics
     /// Panics if the object ID is invalid, the object has already been freed,
     /// or the data is currently borrowed via `with_entry_mut`/`call_attr`.
-    pub fn get_mut(&mut self, id: ObjectId) -> &mut HeapData<'e> {
+    pub fn get_mut(&mut self, id: ObjectId) -> &mut HeapData<'c, 'e> {
         self.objects
             .get_mut(id)
             .expect("Heap::get_mut: slot missing")
@@ -459,7 +459,7 @@ impl<'e> Heap<'e> {
     /// of its payload so we can borrow the heap again inside the call. This avoids the
     /// borrow checker conflict that arises when attribute implementations also need
     /// mutable access to the heap (e.g. for refcounting).
-    pub fn call_attr(&mut self, id: ObjectId, attr: &Attr, args: ArgObjects<'e>) -> RunResult<'static, Object<'e>> {
+    pub fn call_attr(&mut self, id: ObjectId, attr: &Attr, args: ArgObjects<'c, 'e>) -> RunResult<'c, Object<'c, 'e>> {
         // Take data out in a block so the borrow of self.objects ends
         let mut data = take_data!(self, id, "call_attr");
 
@@ -484,7 +484,7 @@ impl<'e> Heap<'e> {
     /// The data is automatically restored after the closure completes.
     pub fn with_entry_mut<F, R>(&mut self, id: ObjectId, f: F) -> R
     where
-        F: FnOnce(&mut Heap<'e>, &mut HeapData<'e>) -> R,
+        F: FnOnce(&mut Heap<'c, 'e>, &mut HeapData<'c, 'e>) -> R,
     {
         // Take data out in a block so the borrow of self.objects ends
         let mut data = take_data!(self, id, "with_entry_mut");
@@ -502,7 +502,7 @@ impl<'e> Heap<'e> {
     /// finishes executing.
     pub fn with_two<F, R>(&mut self, left: ObjectId, right: ObjectId, f: F) -> R
     where
-        F: FnOnce(&mut Heap<'e>, &HeapData<'e>, &HeapData<'e>) -> R,
+        F: FnOnce(&mut Heap<'c, 'e>, &HeapData<'c, 'e>, &HeapData<'c, 'e>) -> R,
     {
         if left == right {
             // Same object - take data once and pass it twice
@@ -564,13 +564,13 @@ impl<'e> Heap<'e> {
     /// take/restore pattern to avoid the lifetime propagation issues.
     ///
     /// Returns `true` if successful, `false` if the source ID is not a List.
-    pub fn iadd_extend_list(&mut self, source_id: ObjectId, dest: &mut Vec<Object<'e>>) -> bool {
+    pub fn iadd_extend_list(&mut self, source_id: ObjectId, dest: &mut Vec<Object<'c, 'e>>) -> bool {
         // Take the source data temporarily
         let source_data = take_data!(self, source_id, "iadd_extend_list");
 
         let success = if let HeapData::List(list) = &source_data {
             // Copy items and track which refs need incrementing
-            let items: Vec<Object<'e>> = list.as_vec().iter().map(Object::copy_for_extend).collect();
+            let items: Vec<Object<'c, 'e>> = list.as_vec().iter().map(Object::copy_for_extend).collect();
             let ref_ids: Vec<ObjectId> = items
                 .iter()
                 .filter_map(|obj| if let Object::Ref(id) = obj { Some(*id) } else { None })

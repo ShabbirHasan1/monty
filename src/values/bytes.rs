@@ -63,16 +63,16 @@ impl std::ops::Deref for Bytes {
     }
 }
 
-impl<'e> PyValue<'e> for Bytes {
-    fn py_type(&self, _heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for Bytes {
+    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
         "bytes"
     }
 
-    fn py_len(&self, _heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_eq(&self, other: &Self, _heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> bool {
         self.0 == other.0
     }
 
@@ -81,20 +81,20 @@ impl<'e> PyValue<'e> for Bytes {
         // No-op: bytes don't hold Object references
     }
 
-    fn py_bool(&self, _heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         Cow::Owned(bytes_repr(&self.0))
     }
 
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        _args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        _args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'static, Object<'c, 'e>> {
         Err(ExcType::attribute_error(self.py_type(heap), attr))
     }
 }

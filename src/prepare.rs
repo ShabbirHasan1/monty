@@ -3,8 +3,9 @@ use std::collections::hash_map::Entry;
 use ahash::AHashMap;
 
 use crate::args::ArgExprs;
+use crate::callable::Callable;
 use crate::exceptions::{ExcType, ExceptionRaise, SimpleException};
-use crate::expressions::{Const, Expr, ExprLoc, Identifier, Node};
+use crate::expressions::{Expr, ExprLoc, Identifier, Literal, Node};
 use crate::operators::{CmpOperator, Operator};
 use crate::parse_error::ParseError;
 
@@ -116,19 +117,41 @@ impl Prepare {
                     let expr = match exc {
                         Some(expr) => {
                             match expr.expr {
-                                Expr::Name(id) => {
-                                    // Handle raising an exception type without instantiation, e.g. `raise TypeError`.
-                                    // This is transformed into a call: `raise TypeError()` so the exception
-                                    // is properly instantiated before being raised.
-                                    let callable = id.name.parse().map_err(|()| {
-                                        let name = &id.name;
-                                        ParseError::Internal(format!("unknown function: `{name}`").into())
-                                    })?;
-                                    let expr = Expr::Call {
-                                        callable,
+                                // Handle raising an exception type constant without instantiation,
+                                // e.g. `raise TypeError`. This is transformed into a call: `raise TypeError()`
+                                // so the exception is properly instantiated before being raised.
+                                Expr::Callable(Callable::ExcType(exc_type)) => {
+                                    let call_expr = Expr::Call {
+                                        callable: Callable::ExcType(exc_type),
                                         args: ArgExprs::Zero,
                                     };
-                                    Some(ExprLoc::new(id.position, expr))
+                                    Some(ExprLoc::new(expr.position, call_expr))
+                                }
+                                // Handle raising a builtin constant (unlikely but consistent)
+                                Expr::Callable(Callable::Builtin(builtin)) => {
+                                    let call_expr = Expr::Call {
+                                        callable: Callable::Builtin(builtin),
+                                        args: ArgExprs::Zero,
+                                    };
+                                    Some(ExprLoc::new(expr.position, call_expr))
+                                }
+                                Expr::Name(id) => {
+                                    // Handle raising a variable that holds an exception type.
+                                    // This is transformed into a call so the exception is properly instantiated.
+                                    let position = id.position;
+                                    // Name will be looked up in the namespace at runtime
+                                    let (resolved_id, is_new) = self.get_id(id);
+                                    if is_new {
+                                        let exc: ExceptionRaise =
+                                            SimpleException::new(ExcType::NameError, Some(resolved_id.name.into()))
+                                                .into();
+                                        return Err(exc.into());
+                                    }
+                                    let call_expr = Expr::Call {
+                                        callable: Callable::Name(resolved_id),
+                                        args: ArgExprs::Zero,
+                                    };
+                                    Some(ExprLoc::new(position, call_expr))
                                 }
                                 _ => Some(self.prepare_expression(expr)?),
                             }
@@ -192,7 +215,8 @@ impl Prepare {
     fn prepare_expression<'c>(&mut self, loc_expr: ExprLoc<'c>) -> Result<ExprLoc<'c>, ParseError<'c>> {
         let ExprLoc { position, expr } = loc_expr;
         let expr = match expr {
-            Expr::Constant(object) => Expr::Constant(object),
+            Expr::Literal(object) => Expr::Literal(object),
+            Expr::Callable(callable) => Expr::Callable(callable),
             Expr::Name(name) => Expr::Name(self.get_id(name).0),
             Expr::Op { left, op, right } => Expr::Op {
                 left: Box::new(self.prepare_expression(*left)?),
@@ -205,8 +229,24 @@ impl Prepare {
                 right: Box::new(self.prepare_expression(*right)?),
             },
             Expr::Call { callable, mut args } => {
-                // The callable is already resolved, just prepare the arguments and pass through
+                // Prepare the arguments
                 args.prepare_args(|expr| self.prepare_expression(expr))?;
+                // For Name callables, resolve the identifier in the namespace
+                let callable = match callable {
+                    Callable::Name(ident) => {
+                        let (resolved_ident, is_new) = self.get_id(ident);
+                        // Unlike regular name lookups, calling requires the name to already exist.
+                        // Calling an undefined variable should fail at prepare-time, not runtime.
+                        if is_new {
+                            let exc: ExceptionRaise =
+                                SimpleException::new(ExcType::NameError, Some(resolved_ident.name.into())).into();
+                            return Err(exc.into());
+                        }
+                        Callable::Name(resolved_ident)
+                    }
+                    // Builtins and ExcTypes are already resolved at parse time
+                    other => other,
+                };
                 Expr::Call { callable, args }
             }
             Expr::AttrCall { object, attr, mut args } => {
@@ -255,7 +295,7 @@ impl Prepare {
         // instead of separate modulo, then equality check.
         if let Expr::CmpOp { left, op, right } = &expr {
             if op == &CmpOperator::Eq {
-                if let Expr::Constant(Const::Int(value)) = right.expr {
+                if let Expr::Literal(Literal::Int(value)) = right.expr {
                     if let Expr::Op {
                         left: left2,
                         op,
@@ -307,7 +347,7 @@ impl Prepare {
         (
             Identifier {
                 name: ident.name,
-                id,
+                heap_id: Some(id),
                 position: ident.position,
             },
             is_new,

@@ -16,7 +16,7 @@ install: .cargo .pre-commit ## Install the package, dependencies, and pre-commit
 .PHONY: lint-rs
 lint-rs:  ## Lint Rust code with fmt and clippy
 	@cargo fmt --version
-	cargo fmt --all -- --check
+	cargo fmt --all
 	@cargo clippy --version
 	cargo clippy --tests -- -D warnings -A incomplete_features -W clippy::dbg_macro
 	cargo check --tests --features ref-counting

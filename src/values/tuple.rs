@@ -1,4 +1,4 @@
-/// Python tuple type, wrapping a `Vec<Object<'e>>`.
+/// Python tuple type, wrapping a `Vec<Object<'c, 'e>>`.
 ///
 /// This type provides Python tuple semantics. Tuples are immutable sequences
 /// that can contain any Python object. Like lists, tuples properly handle
@@ -15,29 +15,29 @@ use crate::values::PyValue;
 
 /// Python tuple value stored on the heap.
 ///
-/// Wraps a `Vec<Object<'e>>` and provides Python-compatible tuple operations.
+/// Wraps a `Vec<Object<'c, 'e>>` and provides Python-compatible tuple operations.
 /// Unlike lists, tuples are conceptually immutable (though this is not
 /// enforced at the type level for internal operations).
 ///
 /// # Reference Counting
 /// When a tuple is freed, all contained heap references have their refcounts
 /// decremented via `push_stack_ids`.
-#[derive(Debug, PartialEq, Default)]
-pub struct Tuple<'e>(Vec<Object<'e>>);
+#[derive(Debug, Default)]
+pub struct Tuple<'c, 'e>(Vec<Object<'c, 'e>>);
 
-impl<'e> Tuple<'e> {
+impl<'c, 'e> Tuple<'c, 'e> {
     /// Creates a new tuple from a vector of objects.
     ///
     /// Note: This does NOT increment reference counts - the caller must
     /// ensure refcounts are properly managed.
     #[must_use]
-    pub fn from_vec(vec: Vec<Object<'e>>) -> Self {
+    pub fn from_vec(vec: Vec<Object<'c, 'e>>) -> Self {
         Self(vec)
     }
 
     /// Returns a reference to the underlying vector.
     #[must_use]
-    pub fn as_vec(&self) -> &Vec<Object<'e>> {
+    pub fn as_vec(&self) -> &Vec<Object<'c, 'e>> {
         &self.0
     }
 
@@ -47,40 +47,40 @@ impl<'e> Tuple<'e> {
     /// incremented. This should be used instead of `.clone()` which would
     /// bypass reference counting.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'e>) -> Self {
-        let cloned: Vec<Object<'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+        let cloned: Vec<Object<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         Self(cloned)
     }
 }
 
-impl<'e> From<Vec<Object<'e>>> for Tuple<'e> {
-    fn from(vec: Vec<Object<'e>>) -> Self {
+impl<'c, 'e> From<Vec<Object<'c, 'e>>> for Tuple<'c, 'e> {
+    fn from(vec: Vec<Object<'c, 'e>>) -> Self {
         Self(vec)
     }
 }
 
-impl<'e> std::iter::FromIterator<Object<'e>> for Tuple<'e> {
-    fn from_iter<I: IntoIterator<Item = Object<'e>>>(iter: I) -> Self {
+impl<'c, 'e> std::iter::FromIterator<Object<'c, 'e>> for Tuple<'c, 'e> {
+    fn from_iter<I: IntoIterator<Item = Object<'c, 'e>>>(iter: I) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl<'e> From<Tuple<'e>> for Vec<Object<'e>> {
-    fn from(tuple: Tuple<'e>) -> Self {
+impl<'c, 'e> From<Tuple<'c, 'e>> for Vec<Object<'c, 'e>> {
+    fn from(tuple: Tuple<'c, 'e>) -> Self {
         tuple.0
     }
 }
 
-impl<'e> PyValue<'e> for Tuple<'e> {
-    fn py_type(&self, _heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for Tuple<'c, 'e> {
+    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
         "tuple"
     }
 
-    fn py_len(&self, _heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_getitem(&self, key: &Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, Object<'e>> {
+    fn py_getitem(&self, key: &Object<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'static, Object<'c, 'e>> {
         // Extract integer index from key, returning TypeError if not an int
         let index = match key {
             Object::Int(i) => *i,
@@ -100,7 +100,7 @@ impl<'e> PyValue<'e> for Tuple<'e> {
         Ok(self.0[normalized_index as usize].clone_with_heap(heap))
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
         if self.0.len() != other.0.len() {
             return false;
         }
@@ -126,18 +126,18 @@ impl<'e> PyValue<'e> for Tuple<'e> {
     /// Tuples don't support attribute calls.
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        _args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        _args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         Err(ExcType::attribute_error(self.py_type(heap), attr))
     }
 
-    fn py_bool(&self, _heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         Cow::Owned(repr_sequence('(', ')', &self.0, heap))
     }
 }

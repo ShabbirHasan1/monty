@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use strum::Display;
 
 use crate::args::ArgObjects;
+use crate::callable::Callable;
 use crate::exceptions::{exc_err_fmt, ExcType, SimpleException};
 use crate::heap::HeapData;
 use crate::heap::{Heap, ObjectId};
@@ -23,8 +24,8 @@ use crate::values::PyValue;
 /// NOTE: `Clone` is intentionally NOT derived. Use `clone_with_heap()` for heap objects
 /// or `clone_immediate()` for immediate values only. Direct cloning via `.clone()` would
 /// bypass reference counting and cause memory leaks.
-#[derive(Debug, PartialEq)]
-pub enum Object<'e> {
+#[derive(Debug)]
+pub enum Object<'c, 'e> {
     // Immediate values (stored inline, no heap allocation)
     Undefined,
     Ellipsis,
@@ -35,36 +36,24 @@ pub enum Object<'e> {
     Range(i64),
     InternString(&'e str),
     InternBytes(&'e [u8]),
+    /// Exception instance (e.g., result of `ValueError('msg')`).
     Exc(SimpleException),
+    /// Callables, nested enum to make calling easier, allow private until Object is privates
+    #[allow(private_interfaces)]
+    Callable(Callable<'c>),
 
     // Heap-allocated values (stored in arena)
     Ref(ObjectId),
 }
 
-impl PartialOrd for Object<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Self::Int(s), Self::Int(o)) => s.partial_cmp(o),
-            (Self::Float(s), Self::Float(o)) => s.partial_cmp(o),
-            (Self::Int(s), Self::Float(o)) => (*s as f64).partial_cmp(o),
-            (Self::Float(s), Self::Int(o)) => s.partial_cmp(&(*o as f64)),
-            (Self::Bool(s), _) => Self::Int(i64::from(*s)).partial_cmp(other),
-            (_, Self::Bool(s)) => self.partial_cmp(&Self::Int(i64::from(*s))),
-            // Ref comparison requires heap context, not supported in PartialOrd
-            (Self::Ref(_), Self::Ref(_)) => None,
-            _ => None,
-        }
-    }
-}
-
-impl From<bool> for Object<'_> {
+impl From<bool> for Object<'_, '_> {
     fn from(v: bool) -> Self {
         Self::Bool(v)
     }
 }
 
-impl<'e> PyValue<'e> for Object<'e> {
-    fn py_type(&self, heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
+    fn py_type(&self, heap: &Heap<'c, 'e>) -> &'static str {
         match self {
             Self::Undefined => "undefined",
             Self::Ellipsis => "ellipsis",
@@ -76,11 +65,12 @@ impl<'e> PyValue<'e> for Object<'e> {
             Self::InternString(_) => "str",
             Self::InternBytes(_) => "bytes",
             Self::Exc(e) => e.type_str(),
+            Self::Callable(c) => c.py_type(heap),
             Self::Ref(id) => heap.get(*id).py_type(heap),
         }
     }
 
-    fn py_len(&self, heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, heap: &Heap<'c, 'e>) -> Option<usize> {
         match self {
             Self::InternString(s) => Some(s.len()),
             Self::InternBytes(b) => Some(b.len()),
@@ -89,7 +79,7 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
         match (self, other) {
             (Self::Undefined, _) => false,
             (_, Self::Undefined) => false,
@@ -145,13 +135,30 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
+    fn py_cmp(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Ordering> {
+        match (self, other) {
+            (Self::Int(s), Self::Int(o)) => s.partial_cmp(o),
+            (Self::Float(s), Self::Float(o)) => s.partial_cmp(o),
+            (Self::Int(s), Self::Float(o)) => (*s as f64).partial_cmp(o),
+            (Self::Float(s), Self::Int(o)) => s.partial_cmp(&(*o as f64)),
+            (Self::Bool(s), _) => Self::Int(i64::from(*s)).py_cmp(other, heap),
+            (_, Self::Bool(s)) => self.py_cmp(&Self::Int(i64::from(*s)), heap),
+            (Self::InternString(s1), Self::InternString(s2)) => s1.partial_cmp(s2),
+            (Self::InternBytes(b1), Self::InternBytes(b2)) => b1.partial_cmp(b2),
+            // Ref comparison requires heap context, not supported in PartialOrd
+            (Self::Ref(_), Self::Ref(_)) => None,
+            _ => None,
+        }
+    }
+
     fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
         if let Object::Ref(id) = self {
             stack.push(*id);
         }
     }
 
-    fn py_bool(&self, heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, heap: &Heap<'c, 'e>) -> bool {
         match self {
             Self::Undefined => false,
             Self::Ellipsis => true,
@@ -161,13 +168,14 @@ impl<'e> PyValue<'e> for Object<'e> {
             Self::Float(f) => *f != 0.0,
             Self::Range(v) => *v != 0,
             Self::Exc(_) => true,
+            Self::Callable(_) => true,
             Self::InternString(s) => !s.is_empty(),
             Self::InternBytes(b) => !b.is_empty(),
             Self::Ref(id) => heap.get(*id).py_bool(heap),
         }
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         match self {
             Self::Undefined => "Undefined".into(),
             Self::Ellipsis => "Ellipsis".into(),
@@ -185,13 +193,14 @@ impl<'e> PyValue<'e> for Object<'e> {
             }
             Self::Range(size) => format!("0:{size}").into(),
             Self::Exc(exc) => format!("{exc}").into(),
+            Self::Callable(c) => c.py_repr(heap),
             Self::InternString(s) => string_repr(s).into(),
             Self::InternBytes(b) => bytes_repr(b).into(),
             Self::Ref(id) => heap.get(*id).py_repr(heap),
         }
     }
 
-    fn py_str<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_str<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         match self {
             Self::InternString(s) => (*s).into(),
             Self::Ref(id) => heap.get(*id).py_str(heap),
@@ -199,7 +208,7 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Object::Int(v1 + v2)),
             (Self::Float(v1), Self::Float(v2)) => Some(Object::Float(v1 + v2)),
@@ -256,14 +265,14 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
-    fn py_sub(&self, other: &Self, _heap: &mut Heap<'e>) -> Option<Object<'e>> {
+    fn py_sub(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Object::Int(v1 - v2)),
             _ => None,
         }
     }
 
-    fn py_mod(&self, other: &Self) -> Option<Object<'e>> {
+    fn py_mod(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Object::Int(v1 % v2)),
             (Self::Float(v1), Self::Float(v2)) => Some(Object::Float(v1 % v2)),
@@ -283,7 +292,7 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
-    fn py_iadd(&mut self, other: Object<'e>, heap: &mut Heap<'e>, _self_id: Option<ObjectId>) -> bool {
+    fn py_iadd(&mut self, other: Self, heap: &mut Heap<'c, 'e>, _self_id: Option<ObjectId>) -> bool {
         match (&self, &other) {
             (Self::Int(v1), Self::Int(v2)) => {
                 *self = Object::Int(*v1 + v2);
@@ -349,7 +358,7 @@ impl<'e> PyValue<'e> for Object<'e> {
         }
     }
 
-    fn py_getitem(&self, key: &Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, Object<'e>> {
+    fn py_getitem(&self, key: &Self, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Self> {
         match self {
             Object::Ref(id) => {
                 // Need to take entry out to allow mutable heap access
@@ -359,9 +368,16 @@ impl<'e> PyValue<'e> for Object<'e> {
             _ => Err(ExcType::type_error_not_sub(self.py_type(heap))),
         }
     }
+
+    // fn py_call(&self, heap: &mut Heap<'c, 'e>, args: ArgObjects<'c, 'e>) -> Option<RunResult<'c, Self>> {
+    //     match self {
+    //         Self::Callable(c) => Some(c.call(heap, args)),
+    //         _ => None,
+    //     }
+    // }
 }
 
-impl<'e> Object<'e> {
+impl<'c, 'e> Object<'c, 'e> {
     /// Returns a stable, unique identifier for this object, boxing it to the heap if necessary.
     ///
     /// Should match Python's `id()` function.
@@ -372,7 +388,7 @@ impl<'e> Object<'e> {
     ///
     /// Singletons (None, True, False, etc.) return IDs from a dedicated tagged range without allocation.
     /// Already heap-allocated objects (Ref) reuse their `ObjectId` inside the heap-tagged range.
-    pub fn id(&mut self, heap: &mut Heap<'e>) -> usize {
+    pub fn id(&mut self, heap: &mut Heap<'c, 'e>) -> usize {
         match self {
             // should not be used in practice
             Self::Undefined => singleton_id(SingletonSlot::Undefined),
@@ -406,7 +422,7 @@ impl<'e> Object<'e> {
     }
 
     /// Equivalent of Python's `is` method.
-    pub fn is(&mut self, heap: &mut Heap<'e>, other: &mut Self) -> bool {
+    pub fn is(&mut self, heap: &mut Heap<'c, 'e>, other: &mut Self) -> bool {
         self.id(heap) == other.id(heap)
     }
 
@@ -417,7 +433,7 @@ impl<'e> Object<'e> {
     ///
     /// For heap-allocated objects (Ref variant), this computes the hash lazily
     /// on first use and caches it for subsequent calls.
-    pub fn py_hash_u64(&self, heap: &mut Heap<'e>) -> Option<u64> {
+    pub fn py_hash_u64(&self, heap: &mut Heap<'c, 'e>) -> Option<u64> {
         match self {
             // Immediate values can be hashed directly
             Self::Undefined => Some(0),
@@ -449,6 +465,12 @@ impl<'e> Object<'e> {
                 // based on the exception type and argument for proper distribution
                 Some(e.py_hash())
             }
+            Self::Callable(c) => {
+                // Builtins have a fixed identity, hash based on variant discriminant
+                let mut hasher = DefaultHasher::new();
+                std::mem::discriminant(c).hash(&mut hasher);
+                Some(hasher.finish())
+            }
             Self::InternString(s) => {
                 let mut hasher = DefaultHasher::new();
                 s.hash(&mut hasher);
@@ -479,10 +501,10 @@ impl<'e> Object<'e> {
     /// to generate accurate error messages.
     pub fn call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         if let Self::Ref(id) = self {
             heap.call_attr(*id, attr, args)
         } else {
@@ -501,7 +523,7 @@ impl<'e> Object<'e> {
     /// proper reference counting. Using `.clone()` directly will bypass reference counting
     /// and cause memory leaks or double-frees.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'e>) -> Self {
+    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
         match self {
             Self::Ref(id) => {
                 heap.inc_ref(*id);
@@ -521,7 +543,7 @@ impl<'e> Object<'e> {
     /// # Important
     /// This method MUST be called before overwriting a namespace slot or discarding
     /// a value to prevent memory leaks.
-    pub fn drop_with_heap(self, heap: &mut Heap<'e>) {
+    pub fn drop_with_heap(self, heap: &mut Heap<'c, 'e>) {
         if let Self::Ref(id) = self {
             heap.dec_ref(id);
         }
@@ -541,6 +563,7 @@ impl<'e> Object<'e> {
             Self::Float(v) => Self::Float(*v),
             Self::Range(v) => Self::Range(*v),
             Self::Exc(e) => Self::Exc(e.clone()),
+            Self::Callable(c) => Self::Callable(c.clone()),
             Self::InternString(s) => Self::InternString(s),
             Self::InternBytes(b) => Self::InternBytes(b),
             Self::Ref(_) => panic!("Ref clones must go through clone_with_heap to maintain refcounts"),
@@ -565,6 +588,7 @@ impl<'e> Object<'e> {
             Self::Float(v) => Self::Float(*v),
             Self::Range(v) => Self::Range(*v),
             Self::Exc(e) => Self::Exc(e.clone()),
+            Self::Callable(c) => Self::Callable(c.clone()),
             Self::InternString(s) => Self::InternString(s),
             Self::InternBytes(b) => Self::InternBytes(b),
             Self::Ref(id) => Self::Ref(*id), // Caller must increment refcount!

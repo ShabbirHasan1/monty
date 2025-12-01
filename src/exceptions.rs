@@ -5,10 +5,11 @@ use std::hash::{Hash, Hasher};
 
 use strum::{Display, EnumString, IntoStaticStr};
 
+use crate::args::ArgObjects;
 use crate::expressions::ExprLoc;
 use crate::heap::HeapData;
 use crate::object::{Attr, Object};
-use crate::operators::Operator;
+use crate::operators::{CmpOperator, Operator};
 use crate::parse::CodeRange;
 use crate::run::RunResult;
 use crate::values::str::string_repr;
@@ -31,6 +32,36 @@ pub enum ExcType {
 }
 
 impl ExcType {
+    /// Creates an exception instance from an exception type and arguments.
+    ///
+    /// Handles exception constructors like `ValueError('message')`.
+    /// Currently supports zero or one string argument.
+    pub(crate) fn call<'c, 'e>(
+        self,
+        heap: &mut Heap<'c, 'e>,
+        args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
+        match args {
+            ArgObjects::Zero => Ok(Object::Exc(SimpleException::new(self, None))),
+            ArgObjects::One(Object::InternString(s)) => {
+                Ok(Object::Exc(SimpleException::new(self, Some(s.to_owned().into()))))
+            }
+            ArgObjects::One(Object::Ref(object_id)) => {
+                if let HeapData::Str(s) = heap.get(object_id) {
+                    Ok(Object::Exc(SimpleException::new(
+                        self,
+                        Some(s.as_str().to_owned().into()),
+                    )))
+                } else {
+                    internal_err!(InternalRunError::TodoError; "Exceptions can only be called with zero or one string argument")
+                }
+            }
+            _ => {
+                internal_err!(InternalRunError::TodoError; "Exceptions can only be called with zero or one string argument")
+            }
+        }
+    }
+
     #[must_use]
     pub fn attribute_error(type_str: &str, attr: &Attr) -> RunError<'static> {
         exc_fmt!(Self::AttributeError; "'{type_str}' object has no attribute '{attr}'").into()
@@ -54,7 +85,7 @@ impl ExcType {
     /// For string keys, uses the raw string value without extra quoting.
     /// For other types, uses repr.
     #[must_use]
-    pub fn key_error(key: &Object<'_>, heap: &Heap<'_>) -> RunError<'static> {
+    pub fn key_error(key: &Object<'_, '_>, heap: &Heap<'_, '_>) -> RunError<'static> {
         let key_str = match key {
             Object::InternString(s) => (*s).to_owned(),
             Object::Ref(id) => {
@@ -225,12 +256,9 @@ impl SimpleException {
         left: &ExprLoc<'c>,
         op: &Operator,
         right: &ExprLoc<'c>,
-        left_object: Object,
-        right_object: Object,
-        heap: &Heap<'_>,
+        left_type: &str,
+        right_type: &str,
     ) -> RunResult<'c, T> {
-        let left_type = left_object.py_type(heap);
-        let right_type = right_object.py_type(heap);
         let new_position = left.position.extend(&right.position);
 
         // CPython uses a special message for str/list + operations
@@ -243,6 +271,21 @@ impl SimpleException {
         Err(SimpleException::new(ExcType::TypeError, Some(message.into()))
             .with_position(new_position)
             .into())
+    }
+
+    pub(crate) fn cmp_type_error<'c, T>(
+        left: &ExprLoc<'c>,
+        op: &CmpOperator,
+        right: &ExprLoc<'c>,
+        left_type: &str,
+        right_type: &str,
+    ) -> RunResult<'c, T> {
+        let new_position = left.position.extend(&right.position);
+
+        let e =
+            exc_fmt!(ExcType::TypeError; "'{op}' not supported between instances of '{left_type}' and '{right_type}'");
+
+        Err(e.with_position(new_position).into())
     }
 }
 

@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
+
 use crate::args::{ArgExprs, ArgObjects};
 use crate::exceptions::{internal_err, ExcType, InternalRunError, SimpleException};
-use crate::expressions::{Callable, Expr, ExprLoc, Identifier};
+use crate::expressions::{Expr, ExprLoc, Identifier};
 use crate::heap::Heap;
 use crate::object::{Attr, Object};
 use crate::operators::{CmpOperator, Operator};
@@ -13,28 +15,19 @@ use crate::HeapData;
 /// `namespace` provides the current frame bindings, while `heap` is threaded so any
 /// future heap-backed objects can be created/cloned without re-threading plumbing later.
 pub(crate) fn evaluate_use<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     expr_loc: &'e ExprLoc<'c>,
-) -> RunResult<'c, Object<'e>> {
+) -> RunResult<'c, Object<'c, 'e>> {
     match &expr_loc.expr {
-        Expr::Constant(literal) => Ok(literal.to_object()),
-        Expr::Name(ident) => {
-            if let Some(object) = namespace.get(ident.id) {
-                match object {
-                    Object::Undefined => Err(InternalRunError::Undefined(ident.name.clone().into()).into()),
-                    _ => Ok(object.clone_with_heap(heap)),
-                }
-            } else {
-                let name = ident.name.clone();
-
-                Err(SimpleException::new(ExcType::NameError, Some(name.into()))
-                    .with_position(expr_loc.position)
-                    .into())
-            }
+        Expr::Literal(literal) => Ok(literal.to_object()),
+        Expr::Callable(callable) => Ok(callable.to_object()),
+        Expr::Name(ident) => namespace_get_mut(namespace, ident).map(|object| object.clone_with_heap(heap)),
+        Expr::Call { callable, args } => {
+            let args = evaluate_args(namespace, heap, args)?;
+            callable.call(namespace, heap, args)
         }
-        Expr::Call { callable, args } => Ok(call_function(namespace, heap, callable, args)?),
-        Expr::AttrCall { object, attr, args } => Ok(attr_call(namespace, heap, expr_loc, object, attr, args)?),
+        Expr::AttrCall { object, attr, args } => Ok(attr_call(namespace, heap, object, attr, args)?),
         Expr::Op { left, op, right } => eval_op(namespace, heap, left, op, right),
         Expr::CmpOp { left, op, right } => Ok(cmp_op(namespace, heap, left, op, right)?.into()),
         Expr::List(elements) => {
@@ -81,28 +74,20 @@ pub(crate) fn evaluate_use<'c, 'e>(
 /// `namespace` provides the current frame bindings, while `heap` is threaded so any
 /// future heap-backed objects can be created/cloned without re-threading plumbing later.
 pub(crate) fn evaluate_discard<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     expr_loc: &'e ExprLoc<'c>,
 ) -> RunResult<'c, ()> {
     match &expr_loc.expr {
-        Expr::Constant(_) => Ok(()),
-        Expr::Name(ident) => {
-            if let Some(object) = namespace.get(ident.id) {
-                match object {
-                    Object::Undefined => Err(InternalRunError::Undefined(ident.name.clone().into()).into()),
-                    _ => Ok(()),
-                }
-            } else {
-                let name = ident.name.clone();
-
-                Err(SimpleException::new(ExcType::NameError, Some(name.into()))
-                    .with_position(expr_loc.position)
-                    .into())
-            }
+        // TODO, is this right for callable?
+        Expr::Literal(_) | Expr::Callable(_) => Ok(()),
+        Expr::Name(ident) => namespace_get_mut(namespace, ident).map(|_| ()),
+        Expr::Call { callable, args } => {
+            let args = evaluate_args(namespace, heap, args)?;
+            callable.call(namespace, heap, args)?;
+            Ok(())
         }
-        Expr::Call { callable, args } => call_function(namespace, heap, callable, args).map(|_| ()),
-        Expr::AttrCall { object, attr, args } => attr_call(namespace, heap, expr_loc, object, attr, args).map(|_| ()),
+        Expr::AttrCall { object, attr, args } => attr_call(namespace, heap, object, attr, args).map(|_| ()),
         Expr::Op { left, op, right } => eval_op(namespace, heap, left, op, right).map(|_| ()),
         Expr::CmpOp { left, op, right } => cmp_op(namespace, heap, left, op, right).map(|_| ()),
         Expr::List(elements) => {
@@ -134,8 +119,8 @@ pub(crate) fn evaluate_discard<'c, 'e>(
 
 /// Specialized helper for truthiness checks; shares implementation with `evaluate`.
 pub(crate) fn evaluate_bool<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     expr_loc: &'e ExprLoc<'c>,
 ) -> RunResult<'c, bool> {
     if let Expr::CmpOp { left, op, right } = &expr_loc.expr {
@@ -151,12 +136,12 @@ pub(crate) fn evaluate_bool<'c, 'e>(
 
 /// Evaluates a binary operator expression (`+, -, %`, etc.).
 fn eval_op<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     left: &'e ExprLoc<'c>,
     op: &Operator,
     right: &'e ExprLoc<'c>,
-) -> RunResult<'c, Object<'e>> {
+) -> RunResult<'c, Object<'c, 'e>> {
     let left_object = evaluate_use(namespace, heap, left)?;
     let right_object = evaluate_use(namespace, heap, right)?;
     let op_object: Option<Object> = match op {
@@ -170,21 +155,24 @@ fn eval_op<'c, 'e>(
             return internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented");
         }
     };
-    match op_object {
-        Some(object) => {
-            // Drop temporary references to operands now that the operation is complete
-            left_object.drop_with_heap(heap);
-            right_object.drop_with_heap(heap);
-            Ok(object)
-        }
-        None => SimpleException::operand_type_error(left, op, right, left_object, right_object, heap),
+    if let Some(object) = op_object {
+        // Drop temporary references to operands now that the operation is complete
+        left_object.drop_with_heap(heap);
+        right_object.drop_with_heap(heap);
+        Ok(object)
+    } else {
+        let left_type = left_object.py_type(heap);
+        let right_type = right_object.py_type(heap);
+        left_object.drop_with_heap(heap);
+        right_object.drop_with_heap(heap);
+        SimpleException::operand_type_error(left, op, right, left_type, right_type)
     }
 }
 
 /// Evaluates comparison operators, reusing `evaluate` so heap semantics remain consistent.
 fn cmp_op<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     left: &'e ExprLoc<'c>,
     op: &CmpOperator,
     right: &'e ExprLoc<'c>,
@@ -192,113 +180,53 @@ fn cmp_op<'c, 'e>(
     let mut left_object = evaluate_use(namespace, heap, left)?;
     let mut right_object = evaluate_use(namespace, heap, right)?;
 
-    // For ModEq, handle separately since error path consumes the objects
-    if let CmpOperator::ModEq(v) = op {
-        return match left_object.py_mod_eq(&right_object, *v) {
-            Some(b) => {
-                left_object.drop_with_heap(heap);
-                right_object.drop_with_heap(heap);
-                Ok(b)
-            }
-            None => SimpleException::operand_type_error(left, &Operator::Mod, right, left_object, right_object, heap),
-        };
-    }
-
     let result = match op {
-        CmpOperator::Eq => left_object.py_eq(&right_object, heap),
-        CmpOperator::NotEq => !left_object.py_eq(&right_object, heap),
-        CmpOperator::Gt => left_object.gt(&right_object),
-        CmpOperator::GtE => left_object.ge(&right_object),
-        CmpOperator::Lt => left_object.lt(&right_object),
-        CmpOperator::LtE => left_object.le(&right_object),
-        CmpOperator::Is => left_object.is(heap, &mut right_object),
-        CmpOperator::IsNot => !left_object.is(heap, &mut right_object),
-        CmpOperator::ModEq(_) => unreachable!(), // Handled above
-        _ => {
-            left_object.drop_with_heap(heap);
-            right_object.drop_with_heap(heap);
-            return internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented");
-        }
+        CmpOperator::Eq => Some(left_object.py_eq(&right_object, heap)),
+        CmpOperator::NotEq => Some(!left_object.py_eq(&right_object, heap)),
+        CmpOperator::Gt => left_object.py_cmp(&right_object, heap).map(Ordering::is_gt),
+        CmpOperator::GtE => left_object.py_cmp(&right_object, heap).map(Ordering::is_ge),
+        CmpOperator::Lt => left_object.py_cmp(&right_object, heap).map(Ordering::is_lt),
+        CmpOperator::LtE => left_object.py_cmp(&right_object, heap).map(Ordering::is_le),
+        CmpOperator::Is => Some(left_object.is(heap, &mut right_object)),
+        CmpOperator::IsNot => Some(!left_object.is(heap, &mut right_object)),
+        CmpOperator::ModEq(v) => left_object.py_mod_eq(&right_object, *v),
+        _ => None,
     };
 
-    // Drop temporary references to operands
-    left_object.drop_with_heap(heap);
-    right_object.drop_with_heap(heap);
-    Ok(result)
-}
-
-/// Evaluates callable function calls, collecting argument values via the shared heap.
-///
-/// Handles builtin functions, exception constructors, and (eventually) user-defined functions.
-fn call_function<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
-    callable: &Callable,
-    args: &'e ArgExprs<'c>,
-) -> RunResult<'c, Object<'e>> {
-    let args = evaluate_args(namespace, heap, args)?;
-    match callable {
-        Callable::Builtin(builtin) => builtin.call(heap, args),
-        Callable::Exception(exc_type) => call_exception(heap, args, *exc_type),
-        Callable::Ident(_) => {
-            internal_err!(InternalRunError::TodoError; "User defined functions not yet implemented")
-        }
+    if let Some(v) = result {
+        left_object.drop_with_heap(heap);
+        right_object.drop_with_heap(heap);
+        Ok(v)
+    } else {
+        let left_type = left_object.py_type(heap);
+        let right_type = right_object.py_type(heap);
+        left_object.drop_with_heap(heap);
+        right_object.drop_with_heap(heap);
+        SimpleException::cmp_type_error(left, op, right, left_type, right_type)
     }
 }
 
 /// Handles attribute method calls like `list.append`, again threading the heap for safety.
 fn attr_call<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
-    expr_loc: &ExprLoc<'c>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     object_ident: &Identifier<'c>,
     attr: &Attr,
     args: &'e ArgExprs<'c>,
-) -> RunResult<'c, Object<'e>> {
+) -> RunResult<'c, Object<'c, 'e>> {
     // Evaluate arguments first to avoid borrow conflicts
     let args = evaluate_args(namespace, heap, args)?;
 
-    let object = if let Some(object) = namespace.get_mut(object_ident.id) {
-        match object {
-            Object::Undefined => return Err(InternalRunError::Undefined(object_ident.name.clone().into()).into()),
-            _ => object,
-        }
-    } else {
-        let name = object_ident.name.clone();
-
-        return Err(SimpleException::new(ExcType::NameError, Some(name.into()))
-            .with_position(expr_loc.position)
-            .into());
-    };
+    let object = namespace_get_mut(namespace, object_ident)?;
     object.call_attr(heap, attr, args)
 }
 
-fn call_exception<'c, 'e>(heap: &mut Heap<'e>, args: ArgObjects, exc_type: ExcType) -> RunResult<'c, Object<'e>> {
-    match args {
-        ArgObjects::Zero => return Ok(Object::Exc(SimpleException::new(exc_type, None))),
-        ArgObjects::One(Object::InternString(s)) => {
-            return Ok(Object::Exc(SimpleException::new(exc_type, Some(s.to_owned().into()))));
-        }
-        ArgObjects::One(Object::Ref(object_id)) => {
-            if let HeapData::Str(s) = heap.get(object_id) {
-                return Ok(Object::Exc(SimpleException::new(
-                    exc_type,
-                    Some(s.as_str().to_owned().into()),
-                )));
-            }
-        }
-        _ => {}
-    }
-    internal_err!(InternalRunError::TodoError; "Exceptions can only be called with zero or one string argument")
-}
-
 /// Evaluates function arguments into an Args, optimized for common argument counts.
-#[inline]
 fn evaluate_args<'c, 'e>(
-    namespace: &mut [Object<'e>],
-    heap: &mut Heap<'e>,
+    namespace: &mut [Object<'c, 'e>],
+    heap: &mut Heap<'c, 'e>,
     args_expr: &'e ArgExprs<'c>,
-) -> RunResult<'c, ArgObjects<'e>> {
+) -> RunResult<'c, ArgObjects<'c, 'e>> {
     match args_expr {
         ArgExprs::Zero => Ok(ArgObjects::Zero),
         ArgExprs::One(arg) => evaluate_use(namespace, heap, arg).map(ArgObjects::One),
@@ -314,4 +242,20 @@ fn evaluate_args<'c, 'e>(
             .map(ArgObjects::Many),
         _ => todo!("Implement evaluation for kwargs"),
     }
+}
+
+pub fn namespace_get_mut<'c, 'e, 'n>(
+    namespace: &'n mut [Object<'c, 'e>],
+    ident: &Identifier<'c>,
+) -> RunResult<'c, &'n mut Object<'c, 'e>> {
+    if let Some(object) = namespace.get_mut(ident.heap_id.unwrap()) {
+        match object {
+            Object::Undefined => {}
+            _ => return Ok(object),
+        }
+    }
+    let name = ident.name.clone();
+    Err(SimpleException::new(ExcType::NameError, Some(name.into()))
+        .with_position(ident.position)
+        .into())
 }

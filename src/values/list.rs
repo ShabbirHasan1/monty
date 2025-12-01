@@ -17,22 +17,22 @@ use crate::values::PyValue;
 /// When objects are added to the list (via append, insert, etc.), their
 /// reference counts are incremented if they are heap-allocated (Ref variants).
 /// This ensures objects remain valid while referenced by the list.
-#[derive(Debug, PartialEq, Default)]
-pub struct List<'e>(Vec<Object<'e>>);
+#[derive(Debug, Default)]
+pub struct List<'c, 'e>(Vec<Object<'c, 'e>>);
 
-impl<'e> List<'e> {
+impl<'c, 'e> List<'c, 'e> {
     /// Creates a new list from a vector of objects.
     ///
     /// Note: This does NOT increment reference counts - the caller must
     /// ensure refcounts are properly managed.
     #[must_use]
-    pub fn new(vec: Vec<Object<'e>>) -> Self {
+    pub fn new(vec: Vec<Object<'c, 'e>>) -> Self {
         Self(vec)
     }
 
     /// Returns a reference to the underlying vector.
     #[must_use]
-    pub fn as_vec(&self) -> &Vec<Object<'e>> {
+    pub fn as_vec(&self) -> &Vec<Object<'c, 'e>> {
         &self.0
     }
 
@@ -41,7 +41,7 @@ impl<'e> List<'e> {
     /// # Safety Considerations
     /// Be careful when mutating the vector directly - you must manually
     /// manage reference counts for any heap objects you add or remove.
-    pub fn as_vec_mut(&mut self) -> &mut Vec<Object<'e>> {
+    pub fn as_vec_mut(&mut self) -> &mut Vec<Object<'c, 'e>> {
         &mut self.0
     }
 
@@ -63,8 +63,8 @@ impl<'e> List<'e> {
     /// incremented. This should be used instead of `.clone()` which would
     /// bypass reference counting.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'e>) -> Self {
-        let cloned: Vec<Object<'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+        let cloned: Vec<Object<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         Self(cloned)
     }
 
@@ -75,7 +75,7 @@ impl<'e> List<'e> {
     /// was already incremented (e.g., via `clone_with_heap` or `evaluate_use`).
     ///
     /// Returns `Object::None`, matching Python's behavior where `list.append()` returns None.
-    pub fn append(&mut self, _heap: &mut Heap<'e>, item: Object<'e>) {
+    pub fn append(&mut self, _heap: &mut Heap<'c, 'e>, item: Object<'c, 'e>) {
         // Ownership transfer - refcount was already handled by caller
         self.0.push(item);
     }
@@ -91,7 +91,7 @@ impl<'e> List<'e> {
     ///   the item is appended to the end (matching Python semantics).
     ///
     /// Returns `Object::None`, matching Python's behavior where `list.insert()` returns None.
-    pub fn insert(&mut self, _heap: &mut Heap<'e>, index: usize, item: Object<'e>) {
+    pub fn insert(&mut self, _heap: &mut Heap<'c, 'e>, index: usize, item: Object<'c, 'e>) {
         // Ownership transfer - refcount was already handled by caller
         // Python's insert() appends if index is out of bounds
         if index >= self.0.len() {
@@ -102,22 +102,22 @@ impl<'e> List<'e> {
     }
 }
 
-impl<'e> From<List<'e>> for Vec<Object<'e>> {
-    fn from(list: List<'e>) -> Self {
+impl<'c, 'e> From<List<'c, 'e>> for Vec<Object<'c, 'e>> {
+    fn from(list: List<'c, 'e>) -> Self {
         list.0
     }
 }
 
-impl<'e> PyValue<'e> for List<'e> {
-    fn py_type(&self, _heap: &Heap<'e>) -> &'static str {
+impl<'c, 'e> PyValue<'c, 'e> for List<'c, 'e> {
+    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
         "list"
     }
 
-    fn py_len(&self, _heap: &Heap<'e>) -> Option<usize> {
+    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_getitem(&self, key: &Object<'e>, heap: &mut Heap<'e>) -> RunResult<'static, Object<'e>> {
+    fn py_getitem(&self, key: &Object<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Object<'c, 'e>> {
         // Extract integer index from key, returning TypeError if not an int
         let index = match key {
             Object::Int(i) => *i,
@@ -137,7 +137,7 @@ impl<'e> PyValue<'e> for List<'e> {
         Ok(self.0[normalized_index as usize].clone_with_heap(heap))
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'e>) -> bool {
+    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
         if self.0.len() != other.0.len() {
             return false;
         }
@@ -157,24 +157,24 @@ impl<'e> PyValue<'e> for List<'e> {
         }
     }
 
-    fn py_bool(&self, _heap: &Heap<'e>) -> bool {
+    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'e>) -> Cow<'a, str> {
+    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
         Cow::Owned(repr_sequence('[', ']', &self.0, heap))
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'e>) -> Option<Object<'static>> {
+    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Object<'c, 'e>> {
         // Clone both lists' contents with proper refcounting
-        let mut result: Vec<Object<'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
-        let other_cloned: Vec<Object<'e>> = other.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        let mut result: Vec<Object<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        let other_cloned: Vec<Object<'c, 'e>> = other.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         result.extend(other_cloned);
         let id = heap.allocate(HeapData::List(List::new(result)));
         Some(Object::Ref(id))
     }
 
-    fn py_iadd(&mut self, other: Object<'e>, heap: &mut Heap<'e>, self_id: Option<ObjectId>) -> bool {
+    fn py_iadd(&mut self, other: Object<'c, 'e>, heap: &mut Heap<'c, 'e>, self_id: Option<ObjectId>) -> bool {
         // Extract the object ID first, keeping `other` around to drop later
         let Object::Ref(other_id) = &other else { return false };
 
@@ -197,10 +197,10 @@ impl<'e> PyValue<'e> for List<'e> {
 
     fn py_call_attr(
         &mut self,
-        heap: &mut Heap<'e>,
+        heap: &mut Heap<'c, 'e>,
         attr: &Attr,
-        args: ArgObjects<'e>,
-    ) -> RunResult<'static, Object<'e>> {
+        args: ArgObjects<'c, 'e>,
+    ) -> RunResult<'c, Object<'c, 'e>> {
         match attr {
             Attr::Append => {
                 let item = args.get_one_arg("list.append")?;
@@ -231,7 +231,7 @@ impl<'e> PyValue<'e> for List<'e> {
 ///
 /// # Returns
 /// A string representation like "[1, 2, 3]" or "(1, 2, 3)"
-pub(crate) fn repr_sequence<'e>(start: char, end: char, items: &[Object<'e>], heap: &Heap<'e>) -> String {
+pub(crate) fn repr_sequence<'c, 'e>(start: char, end: char, items: &[Object<'c, 'e>], heap: &Heap<'c, 'e>) -> String {
     let mut s = String::from(start);
     let mut iter = items.iter();
     if let Some(first) = iter.next() {

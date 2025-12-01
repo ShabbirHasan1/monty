@@ -1,3 +1,7 @@
+/// Built-in functions for the Python interpreter.
+///
+/// This module contains the `Builtins` enum representing all supported built-in
+/// functions (print, len, str, etc.).
 use strum::{AsRefStr, Display, EnumString};
 
 use crate::args::ArgObjects;
@@ -13,7 +17,7 @@ use crate::values::PyValue;
 /// All variants serialize to lowercase (e.g., `Print` -> "print").
 #[derive(Debug, Clone, Copy, Display, EnumString, AsRefStr)]
 #[strum(serialize_all = "lowercase")]
-pub(crate) enum Builtins {
+pub enum Builtins {
     Print,
     Len,
     Str,
@@ -25,7 +29,7 @@ pub(crate) enum Builtins {
 
 impl Builtins {
     /// Executes the builtin with the provided positional arguments.
-    pub(crate) fn call<'c, 'e>(self, heap: &mut Heap<'e>, args: ArgObjects<'e>) -> RunResult<'c, Object<'e>> {
+    pub fn call<'c, 'e>(self, heap: &mut Heap<'c, 'e>, args: ArgObjects<'c, 'e>) -> RunResult<'c, Object<'c, 'e>> {
         match self {
             Self::Print => {
                 match args {

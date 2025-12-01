@@ -1,9 +1,8 @@
 use std::fmt::{self, Write};
-use std::str::FromStr;
 
 use crate::args::ArgExprs;
-use crate::builtins::Builtins;
-use crate::exceptions::{ExcType, ExceptionRaise};
+use crate::callable::Callable;
+use crate::exceptions::ExceptionRaise;
 use crate::object::{Attr, Object};
 use crate::operators::{CmpOperator, Operator};
 use crate::parse::CodeRange;
@@ -14,67 +13,28 @@ use crate::values::str::string_repr;
 pub(crate) struct Identifier<'c> {
     pub position: CodeRange<'c>,
     pub name: String,
-    pub id: usize,
+    pub heap_id: Option<usize>,
 }
 
 impl<'c> Identifier<'c> {
     pub fn new(name: String, position: CodeRange<'c>) -> Self {
-        Self { name, position, id: 0 }
-    }
-}
-
-/// Represents a callable entity in the Python runtime.
-///
-/// A callable can be a builtin function, an exception type (which acts as a constructor),
-/// or an identifier that will be resolved during preparation.
-#[derive(Debug, Clone)]
-pub(crate) enum Callable<'c> {
-    Builtin(Builtins),
-    Exception(ExcType),
-    // TODO can we remove Ident here and thereby simplify Callable?
-    Ident(Identifier<'c>),
-}
-
-impl fmt::Display for Callable<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Builtin(b) => write!(f, "{b}"),
-            Self::Exception(exc) => write!(f, "{exc}"),
-            Self::Ident(i) => f.write_str(&i.name),
-        }
-    }
-}
-
-/// Parses a callable from its string representation.
-///
-/// Attempts to resolve the name as a builtin function first, then as an exception type.
-/// Returns an error if the name doesn't match any known builtin or exception.
-///
-/// This is used during the preparation phase to resolve identifier names into their
-/// corresponding builtin or exception type callables.
-///
-/// # Examples
-/// - `"print".parse::<Callable>()` returns `Ok(Callable::Builtin(Builtins::Print))`
-/// - `"ValueError".parse::<Callable>()` returns `Ok(Callable::Exception(ExcType::ValueError))`
-/// - `"unknown".parse::<Callable>()` returns `Err(())`
-impl FromStr for Callable<'static> {
-    type Err = ();
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        if let Ok(builtin) = name.parse::<Builtins>() {
-            Ok(Self::Builtin(builtin))
-        } else if let Ok(exc_type) = name.parse::<ExcType>() {
-            Ok(Self::Exception(exc_type))
-        } else {
-            Err(())
+        Self {
+            name,
+            position,
+            heap_id: None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum Expr<'c> {
-    Constant(Const),
+    Literal(Literal),
+    Callable(Callable<'c>),
     Name(Identifier<'c>),
+    /// Function call expression.
+    ///
+    /// The `callable` can be a Builtin, ExcType (resolved at parse time), or a Name
+    /// that will be looked up in the namespace at runtime.
     Call {
         callable: Callable<'c>,
         args: ArgExprs<'c>,
@@ -106,7 +66,8 @@ pub(crate) enum Expr<'c> {
 impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Constant(object) => write!(f, "{object}"),
+            Self::Literal(object) => write!(f, "{object}"),
+            Self::Callable(callable) => write!(f, "{callable}"),
             Self::Name(identifier) => f.write_str(&identifier.name),
             Self::Call { callable, args } => write!(f, "{callable}{args}"),
             Self::AttrCall { object, attr, args } => write!(f, "{}.{}{}", object.name, attr, args),
@@ -148,7 +109,7 @@ impl fmt::Display for Expr<'_> {
 
 impl Expr<'_> {
     pub fn is_none(&self) -> bool {
-        matches!(self, Self::Constant(Const::None))
+        matches!(self, Self::Literal(Literal::None))
     }
 }
 
@@ -161,8 +122,8 @@ impl Expr<'_> {
 ///
 /// Note: unlike the AST `Constant` type, we store tuples only as expressions since they
 /// can't always be recorded as constants.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Const {
+#[derive(Debug, Clone)]
+pub enum Literal {
     Ellipsis,
     None,
     Bool(bool),
@@ -172,12 +133,12 @@ pub enum Const {
     Bytes(Vec<u8>),
 }
 
-impl Const {
+impl Literal {
     /// Converts the literal into its runtime `Object` counterpart.
     ///
     /// This is the only place parse-time data crosses the boundary into runtime
     /// semantics, ensuring every literal follows the same conversion path.
-    pub fn to_object(&self) -> Object<'_> {
+    pub fn to_object<'c>(&self) -> Object<'c, '_> {
         match self {
             Self::Ellipsis => Object::Ellipsis,
             Self::None => Object::None,
@@ -190,7 +151,7 @@ impl Const {
     }
 }
 
-impl fmt::Display for Const {
+impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ellipsis => f.write_str("..."),
@@ -260,7 +221,7 @@ pub(crate) enum Node<'c> {
 
 #[derive(Debug)]
 pub enum FrameExit<'c, 'e> {
-    Return(Object<'e>),
+    Return(Object<'c, 'e>),
     // Yield(Object),
     #[allow(dead_code)] // Planned for future use
     Raise(ExceptionRaise<'c>),

@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::{borrow::Cow, fmt};
 
 use ruff_python_ast::{
@@ -8,7 +7,10 @@ use ruff_python_parser::parse_module;
 use ruff_text_size::TextRange;
 
 use crate::args::{ArgExprs, Kwarg};
-use crate::expressions::{Callable, Const, Expr, ExprLoc, Identifier, Node};
+use crate::builtins::Builtins;
+use crate::callable::Callable;
+use crate::exceptions::ExcType;
+use crate::expressions::{Expr, ExprLoc, Identifier, Literal, Node};
 use crate::operators::{CmpOperator, Operator};
 use crate::parse_error::ParseError;
 
@@ -269,9 +271,16 @@ impl<'c> Parser<'c> {
                 match *func {
                     AstExpr::Name(ast::ExprName { id, range, .. }) => {
                         let name = id.to_string();
-                        let callable = match Callable::from_str(&name) {
-                            Ok(func) => func,
-                            Err(()) => Callable::Ident(Identifier::new(name, self.convert_range(range))),
+                        // Try to resolve the name as a builtin function or exception type.
+                        // If neither, treat it as a name to be looked up at runtime.
+                        let callable = if let Ok(builtin) = name.parse::<Builtins>() {
+                            Callable::Builtin(builtin)
+                        } else if let Ok(exc_type) = name.parse::<ExcType>() {
+                            Callable::ExcType(exc_type)
+                        } else {
+                            // Name will be looked up in the namespace at runtime
+                            let ident = Identifier::new(name, self.convert_range(range));
+                            Callable::Name(ident)
                         };
                         Ok(ExprLoc::new(position, Expr::Call { callable, args }))
                     }
@@ -295,36 +304,37 @@ impl<'c> Parser<'c> {
             AstExpr::TString(_) => Err(ParseError::Todo("FormattedValue")),
             AstExpr::StringLiteral(ast::ExprStringLiteral { value, range, .. }) => Ok(ExprLoc::new(
                 self.convert_range(range),
-                Expr::Constant(Const::Str(value.to_string())),
+                Expr::Literal(Literal::Str(value.to_string())),
             )),
             AstExpr::BytesLiteral(ast::ExprBytesLiteral { value, range, .. }) => {
                 let bytes: Cow<'_, [u8]> = Cow::from(&value);
                 Ok(ExprLoc::new(
                     self.convert_range(range),
-                    Expr::Constant(Const::Bytes(bytes.into_owned())),
+                    Expr::Literal(Literal::Bytes(bytes.into_owned())),
                 ))
             }
             AstExpr::NumberLiteral(ast::ExprNumberLiteral { value, range, .. }) => {
                 let const_value = match value {
                     Number::Int(i) => match i.as_i64() {
-                        Some(i) => Const::Int(i),
+                        Some(i) => Literal::Int(i),
                         None => return Err(ParseError::Todo("BigInt Support")),
                     },
-                    Number::Float(f) => Const::Float(f),
+                    Number::Float(f) => Literal::Float(f),
                     Number::Complex { .. } => return Err(ParseError::Todo("complex constants")),
                 };
-                Ok(ExprLoc::new(self.convert_range(range), Expr::Constant(const_value)))
+                Ok(ExprLoc::new(self.convert_range(range), Expr::Literal(const_value)))
             }
             AstExpr::BooleanLiteral(ast::ExprBooleanLiteral { value, range, .. }) => Ok(ExprLoc::new(
                 self.convert_range(range),
-                Expr::Constant(Const::Bool(value)),
+                Expr::Literal(Literal::Bool(value)),
             )),
             AstExpr::NoneLiteral(ast::ExprNoneLiteral { range, .. }) => {
-                Ok(ExprLoc::new(self.convert_range(range), Expr::Constant(Const::None)))
+                Ok(ExprLoc::new(self.convert_range(range), Expr::Literal(Literal::None)))
             }
-            AstExpr::EllipsisLiteral(ast::ExprEllipsisLiteral { range, .. }) => {
-                Ok(ExprLoc::new(self.convert_range(range), Expr::Constant(Const::Ellipsis)))
-            }
+            AstExpr::EllipsisLiteral(ast::ExprEllipsisLiteral { range, .. }) => Ok(ExprLoc::new(
+                self.convert_range(range),
+                Expr::Literal(Literal::Ellipsis),
+            )),
             AstExpr::Attribute(_) => Err(ParseError::Todo("Attribute")),
             AstExpr::Subscript(ast::ExprSubscript {
                 value, slice, range, ..
@@ -337,10 +347,19 @@ impl<'c> Parser<'c> {
                 ))
             }
             AstExpr::Starred(_) => Err(ParseError::Todo("Starred")),
-            AstExpr::Name(ast::ExprName { id, range, .. }) => Ok(ExprLoc::new(
-                self.convert_range(range),
-                Expr::Name(Identifier::new(id.to_string(), self.convert_range(range))),
-            )),
+            AstExpr::Name(ast::ExprName { id, range, .. }) => {
+                let name = id.to_string();
+                let position = self.convert_range(range);
+                // Check if the name is a builtin function or exception type
+                let expr = if let Ok(builtin) = name.parse::<Builtins>() {
+                    Expr::Callable(Callable::Builtin(builtin))
+                } else if let Ok(exc_type) = name.parse::<ExcType>() {
+                    Expr::Callable(Callable::ExcType(exc_type))
+                } else {
+                    Expr::Name(Identifier::new(name, position))
+                };
+                Ok(ExprLoc::new(position, expr))
+            }
             AstExpr::List(ast::ExprList { elts, range, .. }) => {
                 let items = elts
                     .into_iter()
