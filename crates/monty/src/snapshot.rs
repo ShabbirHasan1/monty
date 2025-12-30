@@ -1,6 +1,11 @@
 use std::fmt::Debug;
 
-use crate::{evaluate::ExternalCall, for_iterator::ForIterator, value::Value};
+use crate::{
+    evaluate::ExternalCall,
+    exception::{ExceptionRaise, SimpleException},
+    for_iterator::ForIterator,
+    value::Value,
+};
 
 /// Result of executing a frame - return, yield, or external function call.
 ///
@@ -20,7 +25,7 @@ pub enum FrameExit {
     ExternalCall(ExternalCall),
 }
 
-pub trait AbstractSnapshotTracker: Clone + Debug {
+pub trait AbstractSnapshotTracker: Debug {
     /// Get the next position to execute from
     fn next(&mut self) -> CodePosition;
 
@@ -51,7 +56,7 @@ impl AbstractSnapshotTracker for NoSnapshotTracker {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct SnapshotTracker {
     /// stack of positions, note this is reversed (last value is the outermost position)
     /// as we push the outermost position last and pop it first
@@ -94,7 +99,7 @@ impl AbstractSnapshotTracker for SnapshotTracker {
 }
 
 /// Represents a position within nested control flow for snapshotting and code resumption.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct CodePosition {
     /// Index of the next node to execute within the node array
     pub index: usize,
@@ -106,7 +111,7 @@ pub(crate) struct CodePosition {
 ///
 /// When execution suspends inside a control flow structure (if/for), this records
 /// which branch was taken so we can skip re-evaluating the condition on resume.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum ClauseState {
     /// When resuming within the if statement,
     /// whether the condition was met - true to resume the if branch and false to resume the else branch
@@ -114,4 +119,41 @@ pub(crate) enum ClauseState {
     /// When resuming within a for loop, `ForIterator` holds the value and the index of the next element
     /// for iteration.
     For(ForIterator),
+    /// When resuming within a try/except/finally block.
+    Try(TryClauseState),
+}
+
+/// State for resuming within a try/except/finally block after an external call.
+///
+/// Tracks which phase of the try/except we're in and any pending state that must
+/// survive external calls in the finally block. Pending exceptions and returns
+/// are stored here so finally blocks can make external calls and still properly
+/// propagate exceptions or return values afterward.
+#[derive(Debug)]
+pub struct TryClauseState {
+    /// Which phase of the try/except block we're in.
+    pub phase: TryPhase,
+    /// If in ExceptHandler phase, which handler index we're executing.
+    pub handler_index: Option<u16>,
+    /// Pending exception to re-raise after finally completes.
+    pub pending_exception: Option<ExceptionRaise>,
+    /// Pending return value to return after finally completes.
+    pub pending_return: Option<Value>,
+    /// Previous current_exception for nested handlers so bare raise keeps working.
+    pub enclosing_exception: Option<SimpleException>,
+}
+
+/// Which phase of a try/except/finally block we're executing.
+///
+/// The order of variants matters for `PartialOrd` - earlier phases come first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryPhase {
+    /// Executing the try body.
+    TryBody,
+    /// Executing an except handler body.
+    ExceptHandler,
+    /// Executing the else block (runs if no exception).
+    Else,
+    /// Executing the finally block.
+    Finally,
 }

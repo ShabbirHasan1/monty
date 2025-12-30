@@ -27,24 +27,71 @@ use crate::value::{Attr, Value};
 pub enum ExcType {
     /// Base exception class - matches any exception in isinstance checks.
     Exception,
-    AssertionError,
-    ValueError,
-    TypeError,
-    NameError,
-    AttributeError,
-    KeyError,
-    IndexError,
-    SyntaxError,
-    NotImplementedError,
-    ZeroDivisionError,
+
+    // --- ArithmeticError hierarchy ---
+    /// Intermediate class for arithmetic errors.
+    ArithmeticError,
+    /// Subclass of ArithmeticError.
     OverflowError,
-    RecursionError,
-    TimeoutError,
-    MemoryError,
+    /// Subclass of ArithmeticError.
+    ZeroDivisionError,
+
+    // --- LookupError hierarchy ---
+    /// Intermediate class for lookup errors.
+    LookupError,
+    /// Subclass of LookupError.
+    IndexError,
+    /// Subclass of LookupError.
+    KeyError,
+
+    // --- RuntimeError hierarchy ---
+    /// Intermediate class for runtime errors.
     RuntimeError,
+    /// Subclass of RuntimeError.
+    NotImplementedError,
+    /// Subclass of RuntimeError.
+    RecursionError,
+
+    // --- Standalone exception types ---
+    AssertionError,
+    AttributeError,
+    MemoryError,
+    NameError,
+    SyntaxError,
+    TimeoutError,
+    TypeError,
+    ValueError,
 }
 
 impl ExcType {
+    /// Checks if this exception type is a subclass of another exception type.
+    ///
+    /// Implements Python's exception hierarchy for try/except matching:
+    /// - `Exception` is the base class for all standard exceptions
+    /// - `LookupError` is the base for `KeyError` and `IndexError`
+    /// - `ArithmeticError` is the base for `ZeroDivisionError` and `OverflowError`
+    /// - `RuntimeError` is the base for `RecursionError` and `NotImplementedError`
+    ///
+    /// Returns true if `self` would be caught by `except handler_type:`.
+    #[must_use]
+    pub fn is_subclass_of(self, handler_type: Self) -> bool {
+        if self == handler_type {
+            return true;
+        }
+        match handler_type {
+            // Exception catches all standard exceptions
+            Self::Exception => true,
+            // LookupError catches KeyError and IndexError
+            Self::LookupError => matches!(self, Self::KeyError | Self::IndexError),
+            // ArithmeticError catches ZeroDivisionError and OverflowError
+            Self::ArithmeticError => matches!(self, Self::ZeroDivisionError | Self::OverflowError),
+            // RuntimeError catches RecursionError and NotImplementedError
+            Self::RuntimeError => matches!(self, Self::RecursionError | Self::NotImplementedError),
+            // All other types only match exactly (handled by self == handler_type above)
+            _ => false,
+        }
+    }
+
     /// Creates an exception instance from an exception type and arguments.
     ///
     /// Handles exception constructors like `ValueError('message')`.

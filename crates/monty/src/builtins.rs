@@ -67,6 +67,16 @@ impl Builtins {
             Self::Type(_) => Type::Type,
         }
     }
+
+    /// Returns the exception type if this is an ExcType builtin.
+    ///
+    /// Used for exception type matching in try/except handlers.
+    pub fn as_exc_type(self) -> Option<ExcType> {
+        match self {
+            Self::ExcType(exc_type) => Some(exc_type),
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for Builtins {
@@ -190,20 +200,17 @@ impl BuiltinsFunctions {
 /// Supports:
 /// - Single types: `isinstance(x, int)`
 /// - Exception types: `isinstance(err, ValueError)`
+/// - Exception hierarchy: `isinstance(err, LookupError)` for KeyError/IndexError
 /// - Nested tuples: `isinstance(x, (int, (str, bytes)))`
 fn isinstance_check(obj_type: Type, classinfo: &Value, heap: &Heap<impl ResourceTracker>) -> Result<bool, ()> {
     match classinfo {
         // Single type: isinstance(x, int)
         Value::Builtin(Builtins::Type(t)) => Ok(obj_type.is_instance_of(*t)),
 
-        // Exception type: isinstance(err, ValueError) or isinstance(err, Exception)
-        Value::Builtin(Builtins::ExcType(exc)) => {
-            // Exception base class matches any exception type
-            if *exc == ExcType::Exception {
-                Ok(matches!(obj_type, Type::Exception(_)))
-            } else {
-                Ok(matches!(obj_type, Type::Exception(e) if e == *exc))
-            }
+        // Exception type: isinstance(err, ValueError) or isinstance(err, LookupError)
+        Value::Builtin(Builtins::ExcType(handler_type)) => {
+            // Check exception hierarchy using is_subclass_of
+            Ok(matches!(obj_type, Type::Exception(exc_type) if exc_type.is_subclass_of(*handler_type)))
         }
 
         // Tuple of types (possibly nested): isinstance(x, (int, (str, bytes)))

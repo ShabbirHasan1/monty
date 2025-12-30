@@ -4,7 +4,7 @@ use crate::callable::Callable;
 use crate::intern::{BytesId, FunctionId, StringId};
 use crate::namespace::NamespaceId;
 use crate::operators::{CmpOperator, Operator};
-use crate::parse::CodeRange;
+use crate::parse::{CodeRange, Try};
 use crate::value::{Attr, Value};
 
 use crate::fstring::FStringPart;
@@ -242,6 +242,11 @@ pub enum Node {
         or_else: Vec<Node>,
     },
     FunctionDef(FunctionId),
+    /// Try/except/else/finally block.
+    ///
+    /// Executes body, catches matching exceptions with handlers, runs else if no exception,
+    /// and always runs finally.
+    Try(Try<Node>),
 }
 
 impl Node {
@@ -264,6 +269,7 @@ impl Node {
             Self::For { iter, .. } => Some(iter.position),
             Self::If { test, .. } => Some(test.position),
             Self::FunctionDef(_) => None,
+            Self::Try(try_) => try_.body.first().and_then(Node::position),
         }
     }
 }

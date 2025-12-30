@@ -64,12 +64,6 @@ mod not_implemented_error {
     }
 
     #[test]
-    fn try_except_returns_not_implemented_error() {
-        let result = Executor::new("try:\n    pass\nexcept:\n    pass".to_owned(), "test.py", &[]);
-        assert_eq!(get_exc_type(result), ExcType::NotImplementedError);
-    }
-
-    #[test]
     fn lambda_returns_not_implemented_error() {
         let result = Executor::new("x = lambda: 1".to_owned(), "test.py", &[]);
         assert_eq!(get_exc_type(result), ExcType::NotImplementedError);

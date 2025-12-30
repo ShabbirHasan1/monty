@@ -1,6 +1,6 @@
 use crate::args::ArgValues;
-use crate::evaluate::{EvalResult, EvaluateExpr};
-use crate::exception::{exc_err_static, exc_fmt, ExcType, RawStackFrame, RunError, SimpleException};
+use crate::evaluate::{EvalResult, EvaluateExpr, ExternalCall};
+use crate::exception::{exc_err_static, exc_fmt, ExcType, ExceptionRaise, RawStackFrame, RunError, SimpleException};
 use crate::expressions::{ExprLoc, Identifier, NameScope, Node};
 use crate::for_iterator::ForIterator;
 use crate::heap::{Heap, HeapData};
@@ -8,9 +8,9 @@ use crate::intern::{FunctionId, Interns, StringId, MODULE_STRING_ID};
 use crate::io::PrintWriter;
 use crate::namespace::{NamespaceId, Namespaces, GLOBAL_NS_IDX};
 use crate::operators::Operator;
-use crate::parse::CodeRange;
+use crate::parse::{CodeRange, ExceptHandler, Try};
 use crate::resource::ResourceTracker;
-use crate::snapshot::{AbstractSnapshotTracker, ClauseState, FrameExit};
+use crate::snapshot::{AbstractSnapshotTracker, ClauseState, FrameExit, TryClauseState, TryPhase};
 use crate::types::PyTrait;
 use crate::value::Value;
 
@@ -45,6 +45,11 @@ pub struct RunFrame<'i, P: AbstractSnapshotTracker, W: PrintWriter> {
     snapshot_tracker: &'i mut P,
     /// Writer for print output
     print: &'i mut W,
+    /// Current exception context for bare `raise` statements.
+    ///
+    /// Set when entering an except handler, cleared when exiting.
+    /// Used by bare `raise` to re-raise the current exception.
+    current_exception: Option<SimpleException>,
 }
 
 /// Extracts a value from `EvalResult`, returning early with `FrameExit::ExternalCall` if
@@ -72,6 +77,7 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
             interns,
             snapshot_tracker,
             print,
+            current_exception: None,
         }
     }
 
@@ -101,6 +107,7 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
             interns,
             snapshot_tracker,
             print,
+            current_exception: None,
         }
     }
 
@@ -233,6 +240,11 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
                 }
             }
             Node::FunctionDef(function_id) => self.define_function(namespaces, heap, *function_id)?,
+            Node::Try(try_) => {
+                if let Some(exit_frame) = self.try_(namespaces, heap, clause_state, try_)? {
+                    return Ok(Some(exit_frame));
+                }
+            }
         }
         Ok(None)
     }
@@ -305,7 +317,14 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
             value.drop_with_heap(heap);
             exc_err_static!(ExcType::TypeError; "exceptions must derive from BaseException")
         } else {
-            Err(RunError::internal("plain raise not yet supported"))
+            // Bare raise - re-raise the current exception
+            if let Some(ref exc) = self.current_exception {
+                // Re-raise the current exception (from except handler context)
+                Err(exc.clone().into())
+            } else {
+                // No current exception - this is a RuntimeError in Python
+                exc_err_static!(ExcType::RuntimeError; "No active exception to reraise")
+            }
         }
     }
 
@@ -758,6 +777,463 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
         Ok(())
     }
 
+    /// Executes a try/except/else/finally block.
+    ///
+    /// The execution flow is:
+    /// 1. Execute try body
+    /// 2. If exception raised: find matching handler, execute it (or mark for re-raise after finally)
+    /// 3. If no exception: execute else block
+    /// 4. Always execute finally block
+    /// 5. If there was an unhandled exception, re-raise it after finally
+    /// 6. If there was a return in try/except/else, return after finally
+    ///
+    /// External calls can occur at any point, requiring resume via TryClauseState.
+    fn try_(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        clause_state: Option<ClauseState>,
+        Try {
+            body,
+            handlers,
+            or_else,
+            finally,
+        }: &Try<Node>,
+    ) -> RunResult<Option<FrameExit>> {
+        // Track if any exception was raised (even if caught) - else block should not run
+        let mut exception_occurred = false;
+
+        // Determine which phase to start in (for resumption) and extract pending state
+        let (start_phase, handler_index, mut pending_exception, mut pending_return, mut handler_enclosing_exception) =
+            match clause_state {
+                Some(ClauseState::Try(state)) => (
+                    state.phase,
+                    state.handler_index,
+                    state.pending_exception,
+                    state.pending_return,
+                    state.enclosing_exception,
+                ),
+                _ => (TryPhase::TryBody, None, None, None, None),
+            };
+
+        // Phase 1: Try body (only if starting from TryBody phase)
+        if start_phase == TryPhase::TryBody {
+            match self.execute(namespaces, heap, body) {
+                Ok(None) => {
+                    // No exception and no return - proceed to else block
+                }
+                Ok(Some(FrameExit::Return(value))) => {
+                    // Return in try body - save for after finally
+                    pending_return = Some(value);
+                }
+                Ok(Some(FrameExit::ExternalCall(ext_call))) => {
+                    // External call - save state and return
+                    self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                        phase: TryPhase::TryBody,
+                        handler_index: None,
+                        pending_exception: None,
+                        pending_return: None,
+                        enclosing_exception: None,
+                    }));
+                    return Ok(Some(FrameExit::ExternalCall(ext_call)));
+                }
+                Err(RunError::Exc(exc)) => {
+                    // An exception occurred - else block should not run
+                    exception_occurred = true;
+                    // Catchable exception - try to find a matching handler
+                    match self.find_matching_handler(namespaces, heap, &exc, handlers) {
+                        Ok(Some((idx, handler))) => {
+                            // Found matching handler - execute it
+                            match self.execute_handler(namespaces, heap, handler, &exc, &mut pending_return)? {
+                                HandlerOutcome::Completed => {}
+                                HandlerOutcome::ExternalCall {
+                                    call,
+                                    enclosing_exception,
+                                } => {
+                                    // Save state for resumption
+                                    self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                                        phase: TryPhase::ExceptHandler,
+                                        handler_index: Some(idx),
+                                        pending_exception: None,
+                                        pending_return: None,
+                                        enclosing_exception,
+                                    }));
+                                    return Ok(Some(FrameExit::ExternalCall(call)));
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            // No matching handler - save exception for re-raise after finally
+                            pending_exception = Some(exc);
+                        }
+                        Err(e) => {
+                            // Error during handler matching - run finally then propagate
+                            return self.execute_finally_then_error(namespaces, heap, finally, e);
+                        }
+                    }
+                }
+                Err(e @ (RunError::UncatchableExc(_) | RunError::Internal(_))) => {
+                    // Uncatchable exceptions still run finally, then propagate
+                    return self.execute_finally_then_error(namespaces, heap, finally, e);
+                }
+            }
+        }
+
+        // Phase 2: Else block (only if no exception occurred and not resuming past it)
+        // The else block runs ONLY if no exception was raised in the try body
+        if !exception_occurred
+            && pending_return.is_none()
+            && (start_phase == TryPhase::Else || start_phase == TryPhase::TryBody)
+        {
+            match self.execute(namespaces, heap, or_else) {
+                Ok(None) => {}
+                Ok(Some(FrameExit::Return(value))) => {
+                    pending_return = Some(value);
+                }
+                Ok(Some(FrameExit::ExternalCall(ext_call))) => {
+                    self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                        phase: TryPhase::Else,
+                        handler_index: None,
+                        pending_exception: None,
+                        pending_return: None,
+                        enclosing_exception: None,
+                    }));
+                    return Ok(Some(FrameExit::ExternalCall(ext_call)));
+                }
+                Err(e) => {
+                    // Exception in else block - run finally then propagate
+                    return self.execute_finally_then_error(namespaces, heap, finally, e);
+                }
+            }
+        }
+
+        // Phase 2.5: Resume from ExceptHandler if needed
+        if start_phase == TryPhase::ExceptHandler {
+            if let Some(idx) = handler_index {
+                if let Some(exit) = self.resume_except_handler(
+                    namespaces,
+                    heap,
+                    &handlers[idx as usize],
+                    idx,
+                    finally,
+                    HandlerResumeState {
+                        pending_return: &mut pending_return,
+                        enclosing_exception: &mut handler_enclosing_exception,
+                    },
+                )? {
+                    return Ok(Some(exit));
+                }
+            }
+        }
+
+        // Phase 3: Finally block (always runs)
+        match self.execute(namespaces, heap, finally) {
+            Ok(None) => {
+                // Finally completed normally - handle pending actions
+                if let Some(exc) = pending_exception {
+                    return Err(RunError::Exc(exc));
+                }
+                if let Some(value) = pending_return {
+                    return Ok(Some(FrameExit::Return(value)));
+                }
+                Ok(None)
+            }
+            Ok(Some(FrameExit::Return(value))) => {
+                // Return in finally overrides pending return/exception
+                if let Some(old_return) = pending_return {
+                    old_return.drop_with_heap(heap);
+                }
+                Ok(Some(FrameExit::Return(value)))
+            }
+            Ok(Some(FrameExit::ExternalCall(ext_call))) => {
+                // External call in finally - save pending state for resumption
+                self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                    phase: TryPhase::Finally,
+                    handler_index: None,
+                    pending_exception: pending_exception.take(),
+                    pending_return: pending_return.take(),
+                    enclosing_exception: None,
+                }));
+                Ok(Some(FrameExit::ExternalCall(ext_call)))
+            }
+            Err(e) => {
+                // Exception in finally overrides pending exception
+                if let Some(old_return) = pending_return {
+                    old_return.drop_with_heap(heap);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Finds a matching exception handler for the given exception.
+    ///
+    /// Iterates through handlers in order, returning the first one that matches.
+    /// A bare `except:` matches any exception.
+    ///
+    /// Note: External calls during exception type evaluation are not supported and will
+    /// return an error. This is a limitation of the current design.
+    fn find_matching_handler<'a>(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        exc: &ExceptionRaise,
+        handlers: &'a [ExceptHandler<Node>],
+    ) -> RunResult<Option<(u16, &'a ExceptHandler<Node>)>> {
+        for (idx, handler) in handlers.iter().enumerate() {
+            match &handler.exc_type {
+                None => {
+                    // Bare except - catches everything
+                    let idx = idx.try_into().expect("Failed to convert handler index to u16");
+                    return Ok(Some((idx, handler)));
+                }
+                Some(type_expr) => {
+                    // Evaluate the exception type expression
+                    let eval_result = self.execute_expr(namespaces, heap, type_expr)?;
+                    let type_value = match eval_result {
+                        EvalResult::Value(v) => v,
+                        EvalResult::ExternalCall(_) => {
+                            // External calls in exception type expressions are not supported
+                            return Err(RunError::internal(
+                                "external function calls in except clause type expressions are not supported",
+                            ));
+                        }
+                    };
+                    let match_result = Self::matches_exception_type(&exc.exc, &type_value, heap);
+                    type_value.drop_with_heap(heap);
+                    // Propagate TypeError if the handler type is invalid
+                    let idx = idx.try_into().expect("Failed to convert handler index to u16");
+                    if match_result? {
+                        return Ok(Some((idx, handler)));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Checks if an exception matches a handler type.
+    ///
+    /// Supports:
+    /// - Single exception type: `except ValueError:`
+    /// - Tuple of types: `except (ValueError, TypeError):`
+    /// - Exception hierarchy: `except LookupError:` catches `KeyError` and `IndexError`
+    ///
+    /// Returns `Err(TypeError)` if the handler type is not a valid exception class.
+    fn matches_exception_type(
+        exc: &SimpleException,
+        handler_type: &Value,
+        heap: &Heap<impl ResourceTracker>,
+    ) -> RunResult<bool> {
+        match handler_type {
+            // Exception type (e.g., ValueError, LookupError, Exception)
+            Value::Builtin(builtin) => {
+                if let Some(handler_exc_type) = builtin.as_exc_type() {
+                    Ok(exc.exc_type().is_subclass_of(handler_exc_type))
+                } else {
+                    // Builtin but not an exception type (e.g., int, str, list)
+                    exc_err_static!(ExcType::TypeError; "catching classes that do not inherit from BaseException is not allowed")
+                }
+            }
+            // Tuple of types (e.g., (ValueError, TypeError))
+            Value::Ref(id) => {
+                if let HeapData::Tuple(tuple) = heap.get(*id) {
+                    for v in tuple.as_vec() {
+                        if Self::matches_exception_type(exc, v, heap)? {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                } else {
+                    // Not a tuple - invalid
+                    exc_err_static!(ExcType::TypeError; "catching classes that do not inherit from BaseException is not allowed")
+                }
+            }
+            // Invalid type (e.g., integer, string, etc.)
+            _ => {
+                exc_err_static!(ExcType::TypeError; "catching classes that do not inherit from BaseException is not allowed")
+            }
+        }
+    }
+
+    /// Executes an exception handler body.
+    ///
+    /// Binds the exception to the handler's variable (if specified),
+    /// executes the handler body, then clears the variable.
+    /// Also sets `current_exception` for bare `raise` support.
+    fn execute_handler(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        handler: &ExceptHandler<Node>,
+        exc: &ExceptionRaise,
+        pending_return: &mut Option<Value>,
+    ) -> RunResult<HandlerOutcome> {
+        // Set current exception for bare raise support
+        let old_current_exception = self.current_exception.take();
+        self.current_exception = Some(exc.exc.clone());
+
+        // Bind exception to variable if specified
+        if let Some(ref name) = handler.name {
+            let exc_value = Value::Exc(exc.exc.clone());
+            let ns_idx = match name.scope {
+                NameScope::Global => GLOBAL_NS_IDX,
+                _ => self.local_idx,
+            };
+            let namespace = namespaces.get_mut(ns_idx);
+            let old_value = std::mem::replace(namespace.get_mut(name.namespace_id()), exc_value);
+            old_value.drop_with_heap(heap);
+        }
+
+        // Execute handler body
+        match self.execute(namespaces, heap, &handler.body) {
+            Ok(Some(FrameExit::ExternalCall(ext_call))) => Ok(HandlerOutcome::ExternalCall {
+                call: ext_call,
+                enclosing_exception: old_current_exception,
+            }),
+            Ok(Some(FrameExit::Return(value))) => {
+                *pending_return = Some(value);
+                self.clear_handler_state(namespaces, heap, handler, old_current_exception);
+                Ok(HandlerOutcome::Completed)
+            }
+            Ok(None) => {
+                self.clear_handler_state(namespaces, heap, handler, old_current_exception);
+                Ok(HandlerOutcome::Completed)
+            }
+            Err(e) => {
+                self.clear_handler_state(namespaces, heap, handler, old_current_exception);
+                Err(e)
+            }
+        }
+    }
+
+    /// Resumes execution inside an except handler after an external call suspension.
+    ///
+    /// Restores the handler's binding/current exception, resumes execution, and either
+    /// propagates another suspension or finishes the handler (updating pending returns).
+    fn resume_except_handler(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        handler: &ExceptHandler<Node>,
+        handler_index: u16,
+        finally: &[Node],
+        state: HandlerResumeState<'_>,
+    ) -> RunResult<Option<FrameExit>> {
+        let HandlerResumeState {
+            pending_return,
+            enclosing_exception,
+        } = state;
+
+        // Restore current_exception from the bound variable for bare raise support.
+        if let Some(name) = &handler.name {
+            let ns_idx = match name.scope {
+                NameScope::Global => GLOBAL_NS_IDX,
+                _ => self.local_idx,
+            };
+            let namespace = namespaces.get(ns_idx);
+            if let Value::Exc(exc) = namespace.get(name.namespace_id()) {
+                self.current_exception = Some(exc.clone());
+            }
+        }
+
+        match self.execute(namespaces, heap, &handler.body) {
+            Ok(Some(FrameExit::ExternalCall(ext_call))) => {
+                self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                    phase: TryPhase::ExceptHandler,
+                    handler_index: Some(handler_index),
+                    pending_exception: None,
+                    pending_return: None,
+                    enclosing_exception: enclosing_exception.clone(),
+                }));
+                Ok(Some(FrameExit::ExternalCall(ext_call)))
+            }
+            Ok(Some(FrameExit::Return(value))) => {
+                *pending_return = Some(value);
+                self.clear_handler_state(namespaces, heap, handler, enclosing_exception.take());
+                Ok(None)
+            }
+            Ok(None) => {
+                self.clear_handler_state(namespaces, heap, handler, enclosing_exception.take());
+                Ok(None)
+            }
+            Err(e) => {
+                self.clear_handler_state(namespaces, heap, handler, enclosing_exception.take());
+                self.execute_finally_then_error(namespaces, heap, finally, e)
+            }
+        }
+    }
+
+    /// Clears the handler's exception binding and restores the caller's exception context.
+    fn clear_handler_state(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        handler: &ExceptHandler<Node>,
+        restore_exception: Option<SimpleException>,
+    ) {
+        if let Some(ref name) = handler.name {
+            let ns_idx = match name.scope {
+                NameScope::Global => GLOBAL_NS_IDX,
+                _ => self.local_idx,
+            };
+            let namespace = namespaces.get_mut(ns_idx);
+            let old_value = std::mem::replace(namespace.get_mut(name.namespace_id()), Value::Undefined);
+            old_value.drop_with_heap(heap);
+        }
+
+        self.current_exception = restore_exception;
+    }
+
+    /// Executes the finally block, then propagates the original error.
+    ///
+    /// If finally also raises an exception, that exception takes precedence.
+    /// If finally makes an external call, the pending error is saved in state
+    /// and will be propagated after finally completes on resumption.
+    fn execute_finally_then_error(
+        &mut self,
+        namespaces: &mut Namespaces,
+        heap: &mut Heap<impl ResourceTracker>,
+        finally: &[Node],
+        original_error: RunError,
+    ) -> RunResult<Option<FrameExit>> {
+        match self.execute(namespaces, heap, finally) {
+            Ok(None) => {
+                // Finally completed without overriding control flow - propagate original error
+                Err(original_error)
+            }
+            Ok(Some(FrameExit::Return(value))) => match original_error {
+                // Python semantics dictate that a return inside finally suppresses
+                // any pending catchable exception.
+                RunError::Exc(_) => Ok(Some(FrameExit::Return(value))),
+                // Internal/unreachable errors and uncatchable exceptions must still propagate.
+                other => {
+                    value.drop_with_heap(heap);
+                    Err(other)
+                }
+            },
+            Ok(Some(FrameExit::ExternalCall(ext_call))) => {
+                // External call in finally with pending error - save state for resumption
+                // Only catchable exceptions can be stored; others propagate immediately
+                let RunError::Exc(pending_exc) = original_error else {
+                    return Err(original_error);
+                };
+                self.snapshot_tracker.set_clause_state(ClauseState::Try(TryClauseState {
+                    phase: TryPhase::Finally,
+                    handler_index: None,
+                    pending_exception: Some(pending_exc),
+                    pending_return: None,
+                    enclosing_exception: None,
+                }));
+                Ok(Some(FrameExit::ExternalCall(ext_call)))
+            }
+            Err(e) => {
+                // Finally raised an exception - it takes precedence
+                Err(e)
+            }
+        }
+    }
+
     fn stack_frame(&self, position: CodeRange) -> RawStackFrame {
         // Create frame without parent - the parent chain is built up by add_frame_info()
         // as the error propagates through the call stack
@@ -768,6 +1244,25 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
     fn raise_frame(&self, position: CodeRange) -> RawStackFrame {
         RawStackFrame::from_raise(position, self.name)
     }
+}
+
+/// Result of executing an exception handler \(either directly or via resumption\).
+#[derive(Debug)]
+enum HandlerOutcome {
+    /// Handler finished executing (possibly storing a pending return).
+    Completed,
+    /// Handler suspended due to an external call. Carries the enclosing exception
+    /// so nested bare raises keep working after resumption.
+    ExternalCall {
+        call: ExternalCall,
+        enclosing_exception: Option<SimpleException>,
+    },
+}
+
+/// Mutable references that need to persist across except-handler resumption.
+struct HandlerResumeState<'a> {
+    pending_return: &'a mut Option<Value>,
+    enclosing_exception: &'a mut Option<SimpleException>,
 }
 
 /// Adds the caller's frame to an error as it propagates up the call stack.

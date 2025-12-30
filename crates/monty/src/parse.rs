@@ -124,6 +124,33 @@ pub enum ParseNode {
         position: CodeRange,
         names: Vec<StringId>,
     },
+    /// Try/except/else/finally block.
+    ///
+    /// Handles Python exception handling with optional else (runs if no exception)
+    /// and finally (always runs) blocks.
+    Try(Try<ParseNode>),
+}
+
+#[derive(Debug, Clone)]
+pub struct Try<N> {
+    pub body: Vec<N>,
+    pub handlers: Vec<ExceptHandler<N>>,
+    pub or_else: Vec<N>,
+    pub finally: Vec<N>,
+}
+
+/// A parsed exception handler (except clause).
+///
+/// Represents `except ExcType as name:` or bare `except:` clauses.
+/// The exception type and variable binding are both optional.
+#[derive(Debug, Clone)]
+pub struct ExceptHandler<N> {
+    /// Exception type(s) to catch. None = bare except (catches all).
+    pub exc_type: Option<ExprLoc>,
+    /// Variable name for `except X as e:`. None = no binding.
+    pub name: Option<Identifier>,
+    /// Handler body statements.
+    pub body: Vec<N>,
 }
 
 /// Result of parsing: the AST nodes and the string interner with all interned names.
@@ -201,6 +228,23 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(tail)
+    }
+
+    /// Parses an exception handler (except clause).
+    ///
+    /// Handles `except:`, `except ExcType:`, and `except ExcType as name:` forms.
+    fn parse_except_handler(
+        &mut self,
+        handler: ruff_python_ast::ExceptHandler,
+    ) -> Result<ExceptHandler<ParseNode>, ParseError> {
+        let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
+        let exc_type = match h.type_ {
+            Some(expr) => Some(self.parse_expression(*expr)?),
+            None => None,
+        };
+        let name = h.name.map(|n| self.identifier(n.id, n.range));
+        let body = self.parse_statements(h.body)?;
+        Ok(ExceptHandler { exc_type, name, body })
     }
 
     fn parse_statement(&mut self, statement: Stmt) -> Result<ParseNode, ParseError> {
@@ -306,11 +350,30 @@ impl<'a> Parser<'a> {
                 };
                 Ok(ParseNode::Raise(expr))
             }
-            Stmt::Try(ast::StmtTry { is_star, .. }) => {
+            Stmt::Try(ast::StmtTry {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+                is_star,
+                ..
+            }) => {
                 if is_star {
                     Err(ParseError::not_implemented("exception groups (try*/except*)"))
                 } else {
-                    Err(ParseError::not_implemented("try/except blocks"))
+                    let body = self.parse_statements(body)?;
+                    let handlers = handlers
+                        .into_iter()
+                        .map(|h| self.parse_except_handler(h))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let or_else = self.parse_statements(orelse)?;
+                    let finally = self.parse_statements(finalbody)?;
+                    Ok(ParseNode::Try(Try {
+                        body,
+                        handlers,
+                        or_else,
+                        finally,
+                    }))
                 }
             }
             Stmt::Assert(ast::StmtAssert { test, msg, .. }) => {

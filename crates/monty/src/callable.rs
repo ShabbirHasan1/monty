@@ -79,6 +79,8 @@ impl Callable {
                     Value::ExtFunction(f_id) => {
                         let f_id = *f_id;
                         return if let Some(return_value) = namespaces.take_ext_return_value(heap) {
+                            // When resuming from an external call, the args were re-evaluated
+                            // and need to be dropped since we're using the cached return value
                             if let Some(args) = args_opt.take() {
                                 args.drop_with_heap(heap);
                             }

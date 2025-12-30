@@ -10,7 +10,7 @@ use crate::function::Function;
 use crate::intern::{FunctionId, InternerBuilder, StringId};
 use crate::namespace::NamespaceId;
 use crate::operators::{CmpOperator, Operator};
-use crate::parse::{ParseError, ParseNode, ParseResult, ParsedSignature};
+use crate::parse::{ExceptHandler, ParseError, ParseNode, ParseResult, ParsedSignature, Try};
 use crate::signature::Signature;
 
 /// Result of the prepare phase, containing everything needed to execute code.
@@ -420,9 +420,51 @@ impl<'i> Prepare<'i> {
                     }
                     // Nonlocal statements don't produce any runtime nodes
                 }
+                ParseNode::Try(Try {
+                    body,
+                    handlers,
+                    or_else,
+                    finally,
+                }) => {
+                    let body = self.prepare_nodes(body)?;
+                    let handlers = handlers
+                        .into_iter()
+                        .map(|h| self.prepare_except_handler(h))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let or_else = self.prepare_nodes(or_else)?;
+                    let finally = self.prepare_nodes(finally)?;
+                    new_nodes.push(Node::Try(Try {
+                        body,
+                        handlers,
+                        or_else,
+                        finally,
+                    }));
+                }
             }
         }
         Ok(new_nodes)
+    }
+
+    /// Prepares an exception handler by resolving names in the exception type and body.
+    ///
+    /// The exception variable (if present) is treated as an assigned name in the current scope.
+    fn prepare_except_handler(&mut self, handler: ExceptHandler<ParseNode>) -> Result<ExceptHandler<Node>, ParseError> {
+        let exc_type = match handler.exc_type {
+            Some(expr) => Some(self.prepare_expression(expr)?),
+            None => None,
+        };
+        // The exception variable binding (e.g., `as e:`) is an assignment
+        let name = match handler.name {
+            Some(ident) => {
+                // Track that this name was assigned
+                self.names_assigned_in_order
+                    .insert(self.interner.get_str(ident.name_id).to_string());
+                Some(self.get_id(ident).0)
+            }
+            None => None,
+        };
+        let body = self.prepare_nodes(handler.body)?;
+        Ok(ExceptHandler { exc_type, name, body })
     }
 
     /// Prepares an expression by resolving names, transforming calls, and applying optimizations.
@@ -1048,6 +1090,32 @@ fn collect_scope_info_from_node(
             // But we don't recurse into the function body - that's a separate scope
             assigned_names.insert(interner.get_str(name.name_id).to_string());
         }
+        ParseNode::Try(Try {
+            body,
+            handlers,
+            or_else,
+            finally,
+        }) => {
+            // Recurse into all blocks
+            for n in body {
+                collect_scope_info_from_node(n, global_names, nonlocal_names, assigned_names, interner);
+            }
+            for handler in handlers {
+                // Exception variable name is assigned
+                if let Some(ref name) = handler.name {
+                    assigned_names.insert(interner.get_str(name.name_id).to_string());
+                }
+                for n in &handler.body {
+                    collect_scope_info_from_node(n, global_names, nonlocal_names, assigned_names, interner);
+                }
+            }
+            for n in or_else {
+                collect_scope_info_from_node(n, global_names, nonlocal_names, assigned_names, interner);
+            }
+            for n in finally {
+                collect_scope_info_from_node(n, global_names, nonlocal_names, assigned_names, interner);
+            }
+        }
         // These don't create new names
         ParseNode::Pass
         | ParseNode::Expr(_)
@@ -1123,6 +1191,27 @@ fn collect_cell_vars_from_node(
                 collect_cell_vars_from_node(n, our_locals, cell_vars, interner);
             }
         }
+        ParseNode::Try(Try {
+            body,
+            handlers,
+            or_else,
+            finally,
+        }) => {
+            for n in body {
+                collect_cell_vars_from_node(n, our_locals, cell_vars, interner);
+            }
+            for handler in handlers {
+                for n in &handler.body {
+                    collect_cell_vars_from_node(n, our_locals, cell_vars, interner);
+                }
+            }
+            for n in or_else {
+                collect_cell_vars_from_node(n, our_locals, cell_vars, interner);
+            }
+            for n in finally {
+                collect_cell_vars_from_node(n, our_locals, cell_vars, interner);
+            }
+        }
         // Other nodes don't contain nested function definitions
         _ => {}
     }
@@ -1178,6 +1267,31 @@ fn collect_referenced_names_from_node(node: &ParseNode, referenced: &mut AHashSe
         }
         ParseNode::FunctionDef { .. } => {
             // Don't recurse into nested function bodies - they have their own scope
+        }
+        ParseNode::Try(Try {
+            body,
+            handlers,
+            or_else,
+            finally,
+        }) => {
+            for n in body {
+                collect_referenced_names_from_node(n, referenced, interner);
+            }
+            for handler in handlers {
+                // Exception type expression may reference names
+                if let Some(ref exc_type) = handler.exc_type {
+                    collect_referenced_names_from_expr(exc_type, referenced, interner);
+                }
+                for n in &handler.body {
+                    collect_referenced_names_from_node(n, referenced, interner);
+                }
+            }
+            for n in or_else {
+                collect_referenced_names_from_node(n, referenced, interner);
+            }
+            for n in finally {
+                collect_referenced_names_from_node(n, referenced, interner);
+            }
         }
         ParseNode::Pass | ParseNode::ReturnNone | ParseNode::Global { .. } | ParseNode::Nonlocal { .. } => {}
     }
