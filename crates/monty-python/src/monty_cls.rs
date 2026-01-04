@@ -3,8 +3,8 @@ use std::fmt::Write;
 
 // Use `::monty` to refer to the external crate (not the pymodule)
 use ::monty::{
-    LimitedTracker, MontyObject, NoLimitTracker, PrintWriter, PythonException, ResourceTracker, RunProgress,
-    RunSnapshot, Snapshot, StdPrint,
+    LimitedTracker, MontyException, MontyObject, MontyRun, NoLimitTracker, PrintWriter, ResourceTracker, RunProgress,
+    Snapshot, StdPrint,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError};
 use pyo3::types::{PyDict, PyList, PyTuple};
@@ -24,7 +24,7 @@ use crate::limits::PyResourceLimits;
 #[derive(Debug)]
 pub struct PyMonty {
     /// The compiled code snapshot, ready to execute.
-    runner: RunSnapshot,
+    runner: MontyRun,
     /// The artificial name of the python code "file"
     script_name: String,
     /// Names of input variables expected by the code.
@@ -56,7 +56,7 @@ impl PyMonty {
         let external_function_names = list_str(external_functions, "external_functions")?;
 
         // Create the snapshot (parses the code)
-        let runner = RunSnapshot::new(code, script_name, input_names.clone(), external_function_names.clone())
+        let runner = MontyRun::new(code, script_name, input_names.clone(), external_function_names.clone())
             .map_err(exc_monty_to_py)?;
 
         Ok(Self {
@@ -97,17 +97,17 @@ impl PyMonty {
                 if self.external_function_names.is_empty() {
                     match self
                         .runner
-                        .run_no_snapshot(input_values, $resource_tracker, &mut $print_output)
+                        .run(input_values, $resource_tracker, &mut $print_output)
                     {
                         Ok(v) => monty_to_py(py, &v),
                         Err(err) => Err(exc_monty_to_py(err)),
                     }
                 } else {
-                    // Clone the snapshot since run_snapshot methods consume it - allows reuse of the parsed code
+                    // Clone the runner since start() consumes it - allows reuse of the parsed code
                     let progress = self
                         .runner
                         .clone()
-                        .run_snapshot(input_values, $resource_tracker, &mut $print_output)
+                        .start(input_values, $resource_tracker, &mut $print_output)
                         .map_err(exc_monty_to_py)?;
                     execute_progress(py, progress, external_functions, &mut $print_output)
                 }
@@ -145,13 +145,12 @@ impl PyMonty {
         // Extract input values in the order they were declared
         let input_values = self.extract_input_values(inputs)?;
 
-        /// if there are no external functions, run the code without a snapshotting for better performance
         macro_rules! start {
             ($resource_tracker:expr, $print_output:expr) => {
-                // Clone the snapshot since run_snapshot methods consume it - allows reuse of the parsed code
+                // Clone the runner since start() consumes it - allows reuse of the parsed code
                 self.runner
                     .clone()
-                    .run_snapshot(input_values, $resource_tracker, &mut $print_output)
+                    .start(input_values, $resource_tracker, &mut $print_output)
                     .map_err(exc_monty_to_py)?
             };
         }
@@ -430,11 +429,11 @@ impl<'py> CallbackStringPrint<'py> {
 }
 
 impl PrintWriter for CallbackStringPrint<'_> {
-    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), PythonException> {
+    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), MontyException> {
         self.write(output).map_err(|e| exc_py_to_monty(self.0.py(), e))
     }
 
-    fn stdout_push(&mut self, end: char) -> Result<(), PythonException> {
+    fn stdout_push(&mut self, end: char) -> Result<(), MontyException> {
         self.write(end).map_err(|e| exc_py_to_monty(self.0.py(), e))
     }
 }

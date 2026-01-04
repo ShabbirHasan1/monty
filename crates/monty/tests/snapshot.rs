@@ -1,10 +1,10 @@
-use monty::{MontyObject, NoLimitTracker, RunSnapshot, StdPrint};
+use monty::{MontyObject, MontyRun, NoLimitTracker, StdPrint};
 
 #[test]
 fn simple_expression_completes() {
-    let exec = RunSnapshot::new("x + 1".to_owned(), "test.py", vec!["x".to_owned()], vec![]).unwrap();
+    let exec = MontyRun::new("x + 1".to_owned(), "test.py", vec!["x".to_owned()], vec![]).unwrap();
     let result = exec
-        .run_snapshot(vec![MontyObject::Int(41)], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![MontyObject::Int(41)], NoLimitTracker::default(), &mut StdPrint)
         .unwrap();
     assert_eq!(result.into_complete().expect("complete"), MontyObject::Int(42));
 }
@@ -12,10 +12,8 @@ fn simple_expression_completes() {
 #[test]
 fn external_function_call_expression_statement() {
     // Calling an undefined function returns a FunctionCall variant
-    let exec = RunSnapshot::new("foo(1, 2)".to_owned(), "test.py", vec![], vec!["foo".to_string()]).unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let exec = MontyRun::new("foo(1, 2)".to_owned(), "test.py", vec![], vec!["foo".to_string()]).unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, _kwargs, state) = progress.into_function_call().expect("function call");
     assert_eq!(name, "foo");
@@ -29,7 +27,7 @@ fn external_function_call_expression_statement() {
 #[test]
 fn external_function_call_with_assignment() {
     // Test external function call in assignment: result = foo(1, 2)
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         "
 result = foo(1, 2)
 result + 10"
@@ -39,9 +37,7 @@ result + 10"
         vec!["foo".to_owned()],
     )
     .unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, _kwargs, state) = progress.into_function_call().expect("function call");
     assert_eq!(name, "foo");
@@ -56,7 +52,7 @@ result + 10"
 #[test]
 fn external_function_call_no_args() {
     // Test external function call with no arguments
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         "
 x = get_value()
 x"
@@ -66,9 +62,7 @@ x"
         vec!["get_value".to_owned()],
     )
     .unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, _kwargs, state) = progress.into_function_call().expect("function call");
     assert_eq!(name, "get_value");
@@ -90,7 +84,7 @@ fn multiple_external_function_calls() {
 a = foo(1)
 b = bar(2)
 a + b";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -100,7 +94,7 @@ a + b";
 
     // First external call: foo(1)
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("first call");
@@ -124,16 +118,14 @@ a + b";
 #[test]
 fn external_function_call_with_builtin_args() {
     // Test external function call with builtin function results as arguments
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         "foo(len([1, 2, 3]))".to_owned(),
         "test.py",
         vec![],
         vec!["foo".to_owned()],
     )
     .unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, _kwargs, _) = progress.into_function_call().expect("function call");
     assert_eq!(name, "foo");
@@ -148,10 +140,10 @@ fn external_function_call_preserves_existing_variables() {
 x = 10
 y = foo(x)
 x + y";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
 
     let (_, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -168,7 +160,7 @@ x + y";
 fn external_function_nested_calls() {
     // Test nested external function calls: foo(bar(42))
     let code = "foo(bar(42))";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -178,7 +170,7 @@ fn external_function_nested_calls() {
 
     // First: inner call bar(42)
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -200,13 +192,13 @@ fn external_function_nested_calls() {
 
 #[test]
 fn clone_executor_iter() {
-    // Test that ExecutorIter can be cloned and both copies work independently
-    let exec1 = RunSnapshot::new("foo(42)".to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
+    // Test that MontyRunIter can be cloned and both copies work independently
+    let exec1 = MontyRun::new("foo(42)".to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
     let exec2 = exec1.clone();
 
     // Run first executor
     let (name, args, _kwargs, state) = exec1
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -217,7 +209,7 @@ fn clone_executor_iter() {
 
     // Run second executor (clone) - should work independently
     let (name, args, _kwargs, state) = exec2
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -237,7 +229,7 @@ if x == 1:
 else:
     result = bar(20)
 result";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -247,7 +239,7 @@ result";
 
     // Should call foo(10), not bar
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -268,7 +260,7 @@ if x == 1:
 else:
     result = bar(20)
 result";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -278,7 +270,7 @@ result";
 
     // Should call bar(20), not foo
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -297,11 +289,11 @@ total = 0
 for i in range(3):
     total = total + get_value(i)
 total";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["get_value".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["get_value".to_owned()]).unwrap();
 
     // First iteration: get_value(0)
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("first call");
@@ -334,11 +326,11 @@ for i in range(2):
     x = compute(i)
     results.append(x)
 results";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["compute".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["compute".to_owned()]).unwrap();
 
     // First iteration: compute(0)
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("first call");
@@ -365,10 +357,8 @@ results";
 #[test]
 fn external_function_call_with_kwargs() {
     // Test external function call with keyword arguments
-    let exec = RunSnapshot::new("foo(a=1, b=2)".to_owned(), "test.py", vec![], vec!["foo".to_string()]).unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let exec = MontyRun::new("foo(a=1, b=2)".to_owned(), "test.py", vec![], vec!["foo".to_string()]).unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, kwargs, state) = progress.into_function_call().expect("function call");
     assert_eq!(name, "foo");
@@ -392,16 +382,14 @@ fn external_function_call_with_kwargs() {
 #[test]
 fn external_function_call_with_mixed_args_and_kwargs() {
     // Test external function call with both positional and keyword arguments
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         "foo(1, 2, x=3, y=4)".to_owned(),
         "test.py",
         vec![],
         vec!["foo".to_string()],
     )
     .unwrap();
-    let progress = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
-        .unwrap();
+    let progress = exec.start(vec![], NoLimitTracker::default(), &mut StdPrint).unwrap();
 
     let (name, args, kwargs, state) = progress.into_function_call().expect("function call");
     assert_eq!(name, "foo");
@@ -427,10 +415,10 @@ fn external_function_call_kwargs_in_assignment() {
     let code = "
 result = fetch(url='http://example.com', timeout=30)
 result";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["fetch".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["fetch".to_owned()]).unwrap();
 
     let (name, args, kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -474,11 +462,11 @@ if check(1) == 1:
 else:
     result = 'failed'
 result";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
 
     // First call: check(1) in outer if condition
     let (name, args, _kwargs, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("first call");
@@ -513,11 +501,11 @@ if check(1) == 1:
 else:
     result = 'failed'
 result";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
 
     // First call: check(1) -> 1, outer condition true
     let (_, _, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("first call");
@@ -544,11 +532,11 @@ if get(1) == 1:
         if get(3) == 3:
             result = 123
 result";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["get".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["get".to_owned()]).unwrap();
 
     // First: get(1) -> 1
     let (_, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -576,11 +564,11 @@ total = 0
 for x in get_items():
     total = total + x
 total";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["get_items".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["get_items".to_owned()]).unwrap();
 
     // get_items() returns the iterable
     let (name, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .expect("function call");
@@ -614,7 +602,7 @@ total = 0
 for x in get_items():
     total = total + process(x)
 total";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -624,7 +612,7 @@ total";
 
     // First: get_items() returns [1, 2]
     let (name, _, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -662,11 +650,11 @@ for i in range(2):
     for j in range(2):
         results.append(compute(i, j))
 results";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["compute".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["compute".to_owned()]).unwrap();
 
     // compute(0, 0)
     let (_, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -708,11 +696,11 @@ for i in range(3):
     if check(i) == i:
         results.append(i)
 results";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["check".to_owned()]).unwrap();
 
     // check(0) -> 0 (condition true)
     let (_, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -745,7 +733,7 @@ if should_loop() == 1:
     for i in range(3):
         total = total + get_value(i)
 total";
-    let exec = RunSnapshot::new(
+    let exec = MontyRun::new(
         code.to_owned(),
         "test.py",
         vec![],
@@ -755,7 +743,7 @@ total";
 
     // should_loop() -> 1 (enter the if)
     let (name, _, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -787,11 +775,11 @@ fn multiple_external_calls_in_single_expression() {
     // Test multiple external calls in a single expression: a() + b()
     // Both calls happen before the expression completes.
     let code = "add(1) + add(2)";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["add".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["add".to_owned()]).unwrap();
 
     // First: add(1)
     let (_, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();
@@ -815,11 +803,11 @@ result = 0
 if add(1) + add(2) == 30:
     result = 1
 result";
-    let exec = RunSnapshot::new(code.to_owned(), "test.py", vec![], vec!["add".to_owned()]).unwrap();
+    let exec = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["add".to_owned()]).unwrap();
 
     // First: add(1) in condition
     let (_, args, _, state) = exec
-        .run_snapshot(vec![], NoLimitTracker::default(), &mut StdPrint)
+        .start(vec![], NoLimitTracker::default(), &mut StdPrint)
         .unwrap()
         .into_function_call()
         .unwrap();

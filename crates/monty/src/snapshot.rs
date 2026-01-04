@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{
     evaluate::ExternalCall,
-    exception::{ExceptionRaise, SimpleException},
+    exception_private::{ExceptionRaise, SimpleException},
     for_iterator::ForIterator,
     value::Value,
 };

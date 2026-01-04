@@ -1,4 +1,4 @@
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
 use crate::expressions::{Identifier, NameScope};
 use crate::heap::{Heap, HeapId};
 use crate::intern::Interns;

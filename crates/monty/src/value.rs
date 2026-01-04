@@ -10,7 +10,7 @@ use strum::Display;
 
 use crate::args::ArgValues;
 use crate::builtins::Builtins;
-use crate::exception::{exc_err_fmt, ExcType};
+use crate::exception_private::{exc_err_fmt, ExcType};
 
 use crate::heap::HeapData;
 use crate::heap::{Heap, HeapId};

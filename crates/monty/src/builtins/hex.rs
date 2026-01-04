@@ -1,7 +1,7 @@
 //! Implementation of the hex() builtin function.
 
 use crate::args::ArgValues;
-use crate::exception::{exc_err_fmt, ExcType};
+use crate::exception_private::{exc_err_fmt, ExcType};
 use crate::heap::{Heap, HeapData};
 use crate::resource::ResourceTracker;
 use crate::run_frame::RunResult;

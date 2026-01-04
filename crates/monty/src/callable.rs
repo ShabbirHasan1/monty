@@ -2,7 +2,7 @@ use crate::{
     args::ArgValues,
     builtins::Builtins,
     evaluate::{EvalResult, ExternalCall},
-    exception::{exc_fmt, ExcType},
+    exception_private::{exc_fmt, ExcType},
     expressions::Identifier,
     heap::{Heap, HeapData},
     intern::Interns,

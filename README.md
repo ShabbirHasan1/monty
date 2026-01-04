@@ -26,7 +26,7 @@ def fib(n):
 fib(x)
 """
 
-m = monty.Monty(code, inputs=['x'])
+m = monty.Monty(code, inputs=['x'], script_name='fib.py')
 print(m.run(inputs={'x': 10}))
 #> 55
 ```
@@ -68,7 +68,7 @@ print(result.output)
 ### Rust
 
 ```rust
-use monty::{RunSnapshot, MontyObject, NoLimitTracker, StdPrint};
+use monty::{MontyRun, MontyObject, NoLimitTracker, StdPrint};
 
 let code = r#"
 def fib(n):
@@ -79,7 +79,7 @@ def fib(n):
 fib(x)
 "#;
 
-let snapshot = RunSnapshot::new(code.to_owned(), "fib.py", vec!["x".to_owned()], vec![]).unwrap();
-let result = snapshot.run_no_snapshot(vec![MontyObject::Int(10)], NoLimitTracker::default(), &mut StdPrint).unwrap();
+let snapshot = MontyRun::new(code.to_owned(), "fib.py", vec!["x".to_owned()], vec![]).unwrap();
+let result = snapshot.run(vec![MontyObject::Int(10)], NoLimitTracker::default(), &mut StdPrint).unwrap();
 assert_eq!(result, MontyObject::Int(55));
 ```

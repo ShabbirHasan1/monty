@@ -1,7 +1,7 @@
 use std::fmt::{self, Write};
 
 use crate::{
-    exception::{ExcType, RawStackFrame},
+    exception_private::{ExcType, RawStackFrame},
     intern::Interns,
     parse::CodeRange,
     types::str::string_repr,
@@ -9,7 +9,7 @@ use crate::{
 
 /// Public representation of a Monty exception.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PythonException {
+pub struct MontyException {
     /// The exception type raised
     exc_type: ExcType,
     /// Optional exception message explaining what went wrong
@@ -23,8 +23,8 @@ pub struct PythonException {
 /// CPython shows 3 identical frames, then "[Previous line repeated N more times]".
 const REPEAT_FRAMES_SHOWN: usize = 3;
 
-/// Display implementation for PythonException should exactly match python traceback format.
-impl fmt::Display for PythonException {
+/// Display implementation for MontyException should exactly match python traceback format.
+impl fmt::Display for MontyException {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Print the traceback header if we have frames
         if !self.traceback.is_empty() {
@@ -69,10 +69,10 @@ impl fmt::Display for PythonException {
     }
 }
 
-impl std::error::Error for PythonException {}
+impl std::error::Error for MontyException {}
 
-impl PythonException {
-    /// Create a new PythonException with the given exception type and message.
+impl MontyException {
+    /// Create a new MontyException with the given exception type and message.
     ///
     /// You can't provide a traceback here, it's send when raising the exception.
     #[must_use]
@@ -84,40 +84,34 @@ impl PythonException {
         }
     }
 
+    /// The exception type raised.
     #[must_use]
     pub fn exc_type(&self) -> ExcType {
         self.exc_type
     }
 
+    /// Optional exception message explaining what went wrong.
+    ///
+    /// Equivalent of python's `exc.args[0]`
     #[must_use]
     pub fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
 
+    /// Optional exception message explaining what went wrong.
+    ///
+    /// This takes ownership of the MontyException and returns an owned String.
+    ///
+    /// Equivalent of python's `exc.args[0]`
     #[must_use]
     pub fn into_message(self) -> Option<String> {
         self.message
     }
 
+    /// Stack trace of the exception, first is the outermost frame shown first in the traceback
     #[must_use]
     pub fn traceback(&self) -> &[StackFrame] {
         &self.traceback
-    }
-
-    pub(crate) fn new_full(exc_type: ExcType, message: Option<String>, traceback: Vec<StackFrame>) -> Self {
-        Self {
-            exc_type,
-            message,
-            traceback,
-        }
-    }
-
-    pub(crate) fn runtime_error(err: impl fmt::Display) -> Self {
-        Self {
-            exc_type: ExcType::RuntimeError,
-            message: Some(err.to_string()),
-            traceback: vec![],
-        }
     }
 
     /// Returns a compact summary of the exception.
@@ -144,6 +138,22 @@ impl PythonException {
             format!("{}({})", type_str, string_repr(msg))
         } else {
             format!("{type_str}()")
+        }
+    }
+
+    pub(crate) fn new_full(exc_type: ExcType, message: Option<String>, traceback: Vec<StackFrame>) -> Self {
+        Self {
+            exc_type,
+            message,
+            traceback,
+        }
+    }
+
+    pub(crate) fn runtime_error(err: impl fmt::Display) -> Self {
+        Self {
+            exc_type: ExcType::RuntimeError,
+            message: Some(err.to_string()),
+            traceback: vec![],
         }
     }
 }

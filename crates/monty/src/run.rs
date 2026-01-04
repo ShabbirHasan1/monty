@@ -1,6 +1,6 @@
 //! Public interface for running Monty code.
 use crate::evaluate::ExternalCall;
-use crate::exception::{ExcType, RunError};
+use crate::exception_private::{ExcType, RunError};
 use crate::expressions::Node;
 use crate::heap::Heap;
 use crate::intern::{ExtFunctionId, Interns};
@@ -10,44 +10,34 @@ use crate::object::MontyObject;
 use crate::parse::parse;
 use crate::prepare::prepare;
 use crate::resource::NoLimitTracker;
-use crate::resource::{LimitedTracker, ResourceLimits, ResourceTracker};
+use crate::resource::ResourceTracker;
 use crate::run_frame::{RunFrame, RunResult};
 use crate::snapshot::{CodePosition, FrameExit, NoSnapshotTracker, SnapshotTracker};
 use crate::value::Value;
-use crate::PythonException;
+use crate::MontyException;
 
-/// Snapshot-based executor that supports pausing and resuming execution.
+/// Primary interface for running Monty code.
 ///
-/// Unlike [`Executor`] which runs code to completion, `RunSnapshot` allows
-/// execution to be paused at function calls and resumed later. Call `run_snapshot()`
-/// to start execution - it consumes self and returns a `RunProgress`:
-/// - `RunProgress::FunctionCall { ..., state }` - external function call, call `state.run(return_value)` to resume
-/// - `RunProgress::Complete(value)` - execution finished
-///
-/// This enables snapshotting execution state and returning control to the host
-/// application during long-running computations.
-///
-/// The snapshot is created with `new()` which parses the code, then `run_snapshot()`
-/// is called with inputs to start execution. The heap and namespaces are created
-/// lazily when run is called.
+/// `MontyRun` supports two execution modes:
+/// - **Simple execution**: Use `run()` or `run_no_limits()` to run code to completion
+/// - **Iterative execution**: Use `start()` to start execution which will pause at external function calls and
+///   can be resumed later
 ///
 /// # Example
 /// ```
-/// use monty::{NoLimitTracker, RunSnapshot, RunProgress, MontyObject, StdPrint};
+/// use monty::{MontyRun, MontyObject};
 ///
-/// let snapshot = RunSnapshot::new("x + 1".to_owned(), "test.py", vec!["x".to_owned()], vec![]).unwrap();
-/// match snapshot.run_snapshot(vec![MontyObject::Int(41)], NoLimitTracker::default(), &mut StdPrint).unwrap() {
-///     RunProgress::Complete(result) => assert_eq!(result, MontyObject::Int(42)),
-///     _ => panic!("unexpected function call"),
-/// }
+/// let runner = MontyRun::new("x + 1".to_owned(), "test.py", vec!["x".to_owned()], vec![]).unwrap();
+/// let result = runner.run_no_limits(vec![MontyObject::Int(41)]).unwrap();
+/// assert_eq!(result, MontyObject::Int(42));
 /// ```
 #[derive(Debug, Clone)]
-pub struct RunSnapshot {
+pub struct MontyRun {
     /// The underlying executor containing parsed AST and interns.
     executor: Executor,
 }
 
-impl RunSnapshot {
+impl MontyRun {
     /// Creates a new run snapshot by parsing the given code.
     ///
     /// This only parses and prepares the code - no heap or namespaces are created yet.
@@ -55,24 +45,30 @@ impl RunSnapshot {
     ///
     /// # Arguments
     /// * `code` - The Python code to execute
-    /// * `filename` - The filename for error messages
+    /// * `script_name` - The script name for error messages
     /// * `input_names` - Names of input variables
     ///
     /// # Errors
-    /// Returns `PythonException` if the code cannot be parsed.
+    /// Returns `MontyException` if the code cannot be parsed.
     pub fn new(
         code: String,
-        filename: &str,
+        script_name: &str,
         input_names: Vec<String>,
         external_functions: Vec<String>,
-    ) -> Result<Self, PythonException> {
-        Executor::new_internal(code, filename, input_names, external_functions).map(|executor| Self { executor })
+    ) -> Result<Self, MontyException> {
+        Executor::new(code, script_name, input_names, external_functions).map(|executor| Self { executor })
     }
 
     /// Returns the code that was parsed to create this snapshot.
     #[must_use]
     pub fn code(&self) -> &str {
-        self.executor.code()
+        &self.executor.code
+    }
+
+    /// Executes the code and returns both the result and reference count data, used for testing only.
+    #[cfg(feature = "ref-count-return")]
+    pub fn run_ref_counts(&self, inputs: Vec<MontyObject>) -> Result<RefCountOutput, MontyException> {
+        self.executor.run_ref_counts(inputs)
     }
 
     /// Executes the code to completion assuming not external functions or snapshotting.
@@ -84,19 +80,30 @@ impl RunSnapshot {
     /// * `inputs` - Values to fill the first N slots of the namespace
     /// * `resource_tracker` - Custom resource tracker implementation
     /// * `print` - print print implementation
-    ///
-    pub fn run_no_snapshot(
+    pub fn run(
         &self,
         inputs: Vec<MontyObject>,
         resource_tracker: impl ResourceTracker,
         print: &mut impl PrintWriter,
-    ) -> Result<MontyObject, PythonException> {
+    ) -> Result<MontyObject, MontyException> {
         self.executor.run_with_tracker(inputs, resource_tracker, print)
+    }
+
+    /// Executes the code to completion with no resource limits, printing to stdout/stderr.
+    pub fn run_no_limits(&self, inputs: Vec<MontyObject>) -> Result<MontyObject, MontyException> {
+        self.run(inputs, NoLimitTracker::default(), &mut StdPrint)
     }
 
     /// Starts execution with the given inputs and resource tracker, consuming self.
     ///
     /// Creates the heap and namespaces, then begins execution.
+    ///
+    /// For iterative execution, `start()` consumes self and returns a `RunProgress`:
+    /// - `RunProgress::FunctionCall { ..., state }` - external function call, call `state.run(return_value)` to resume
+    /// - `RunProgress::Complete(value)` - execution finished
+    ///
+    /// This enables snapshotting execution state and returning control to the host
+    /// application during long-running computations.
     ///
     /// # Arguments
     /// * `inputs` - Initial input values (must match length of `input_names` from `new()`)
@@ -104,16 +111,16 @@ impl RunSnapshot {
     /// * `print` - Writer for print output
     ///
     /// # Errors
-    /// Returns `PythonException` if:
+    /// Returns `MontyException` if:
     /// - The number of inputs doesn't match the expected count
     /// - An input value is invalid (e.g., `MontyObject::Repr`)
     /// - A runtime error occurs during execution
-    pub fn run_snapshot<T: ResourceTracker>(
+    pub fn start<T: ResourceTracker>(
         self,
         inputs: Vec<MontyObject>,
         resource_tracker: T,
         print: &mut impl PrintWriter,
-    ) -> Result<RunProgress<T>, PythonException> {
+    ) -> Result<RunProgress<T>, MontyException> {
         let mut heap = Heap::new(self.executor.namespace_size, resource_tracker);
 
         let namespaces = self.executor.prepare_namespaces(inputs, &mut heap)?;
@@ -213,7 +220,7 @@ impl<T: ResourceTracker> Snapshot<T> {
         mut self,
         return_value: MontyObject,
         print: &mut impl PrintWriter,
-    ) -> Result<RunProgress<T>, PythonException> {
+    ) -> Result<RunProgress<T>, MontyException> {
         // Convert MontyObject to Value
         let value = return_value
             .to_value(&mut self.heap, &self.executor.interns)
@@ -234,12 +241,10 @@ impl<T: ResourceTracker> Snapshot<T> {
 
 /// Lower level interface to parse code and run it to completion.
 ///
-/// This interface does not allow for external functions to be called with its public API, so
-/// most applications should use [`RunSnapshot`] instead.
-///
-/// The executor stores the compiled AST and source code for error reporting.
+/// This is an internal type used by [`MontyRun`]. It stores the compiled AST and source code
+/// for error reporting but does not support external functions or iterative execution.
 #[derive(Debug, Clone)]
-pub struct Executor {
+struct Executor {
     namespace_size: usize,
     /// Maps variable names to their indices in the namespace. Used for ref-count testing.
     #[cfg(feature = "ref-count-return")]
@@ -254,35 +259,16 @@ pub struct Executor {
 }
 
 impl Executor {
-    /// Creates a new executor with the given code, filename, and input names.
-    ///
-    /// # Arguments
-    /// * `code` - The Python code to execute.
-    /// * `filename` - The filename of the Python code.
-    /// * `input_names` - The names of the input variables.
-    ///
-    /// # Returns
-    /// A new `Executor` instance which can be used to execute the code.
-    ///
-    /// # Errors
-    /// Returns `PythonException` if the code cannot be parsed.
-    pub fn new(code: String, filename: &str, input_names: Vec<String>) -> Result<Self, PythonException> {
-        Self::new_internal(code, filename, input_names, vec![])
-    }
-
-    fn code(&self) -> &str {
-        &self.code
-    }
-
-    fn new_internal(
+    /// Creates a new executor with the given code, filename, input names, and external functions.
+    fn new(
         code: String,
-        filename: &str,
+        script_name: &str,
         input_names: Vec<String>,
         external_functions: Vec<String>,
-    ) -> Result<Self, PythonException> {
-        let parse_result = parse(&code, filename).map_err(|e| e.into_python_exc(filename, &code))?;
-        let prepared =
-            prepare(parse_result, input_names, &external_functions).map_err(|e| e.into_python_exc(filename, &code))?;
+    ) -> Result<Self, MontyException> {
+        let parse_result = parse(&code, script_name).map_err(|e| e.into_python_exc(script_name, &code))?;
+        let prepared = prepare(parse_result, input_names, &external_functions)
+            .map_err(|e| e.into_python_exc(script_name, &code))?;
 
         // incrementing order matches the indexes used in intern::Interns::get_external_function_name
         let external_function_ids = (0..external_functions.len()).map(ExtFunctionId::new).collect();
@@ -296,69 +282,6 @@ impl Executor {
             external_function_ids,
             code,
         })
-    }
-
-    /// Executes the code with the given input values.
-    ///
-    /// Uses `StdPrint` for print output.
-    ///
-    /// # Arguments
-    /// * `inputs` - Values to fill the first N slots of the namespace (e.g., function parameters)
-    ///
-    /// # Example
-    /// ```
-    /// use monty::Executor;
-    ///
-    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", vec![]).unwrap();
-    /// let py_object = ex.run_no_limits(vec![]).unwrap();
-    /// assert_eq!(py_object, monty::MontyObject::Int(3));
-    /// ```
-    pub fn run_no_limits(&self, inputs: Vec<MontyObject>) -> Result<MontyObject, PythonException> {
-        self.run_with_tracker(inputs, NoLimitTracker::default(), &mut StdPrint)
-    }
-
-    /// Executes the code with configurable resource limits.
-    ///
-    /// Uses `StdPrint` for print output.
-    ///
-    /// # Arguments
-    /// * `inputs` - Values to fill the first N slots of the namespace
-    /// * `limits` - Resource limits to enforce during execution
-    ///
-    /// # Example
-    /// ```
-    /// use std::time::Duration;
-    /// use monty::{Executor, ResourceLimits, MontyObject};
-    ///
-    /// let limits = ResourceLimits::new()
-    ///     .max_allocations(1000)
-    ///     .max_duration(Duration::from_secs(5));
-    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", vec![]).unwrap();
-    /// let py_object = ex.run_with_limits(vec![], limits).unwrap();
-    /// assert_eq!(py_object, MontyObject::Int(3));
-    /// ```
-    pub fn run_with_limits(
-        &self,
-        inputs: Vec<MontyObject>,
-        limits: ResourceLimits,
-    ) -> Result<MontyObject, PythonException> {
-        let resource_tracker = LimitedTracker::new(limits);
-        self.run_with_tracker(inputs, resource_tracker, &mut StdPrint)
-    }
-
-    /// Executes the code with a custom print print.
-    ///
-    /// This allows capturing or redirecting print output from the executed code.
-    ///
-    /// # Arguments
-    /// * `inputs` - Values to fill the first N slots of the namespace
-    /// * `print` - Custom print print implementation
-    pub fn run_with_writer(
-        &self,
-        inputs: Vec<MontyObject>,
-        print: &mut impl PrintWriter,
-    ) -> Result<MontyObject, PythonException> {
-        self.run_with_tracker(inputs, NoLimitTracker::default(), print)
     }
 
     /// Executes the code with a custom resource tracker.
@@ -377,7 +300,7 @@ impl Executor {
         inputs: Vec<MontyObject>,
         resource_tracker: impl ResourceTracker,
         print: &mut impl PrintWriter,
-    ) -> Result<MontyObject, PythonException> {
+    ) -> Result<MontyObject, MontyException> {
         let mut heap = Heap::new(self.namespace_size, resource_tracker);
         let mut namespaces = self.prepare_namespaces(inputs, &mut heap)?;
 
@@ -393,7 +316,7 @@ impl Executor {
             .map_err(|e| e.into_python_exception(&self.interns, &self.code))
     }
 
-    /// Executes the code and returns both the result and reference count data.
+    /// Executes the code and returns both the result and reference count data, used for testing only.
     ///
     /// This is used for testing reference counting behavior. Returns:
     /// - The execution result (`Exit`)
@@ -407,7 +330,7 @@ impl Executor {
     ///
     /// Only available when the `ref-count-return` feature is enabled.
     #[cfg(feature = "ref-count-return")]
-    pub fn run_ref_counts(&self, inputs: Vec<MontyObject>) -> Result<RefCountOutput, PythonException> {
+    fn run_ref_counts(&self, inputs: Vec<MontyObject>) -> Result<RefCountOutput, MontyException> {
         use crate::value::Value;
         use std::collections::HashSet;
 
@@ -460,12 +383,12 @@ impl Executor {
         &self,
         inputs: Vec<MontyObject>,
         heap: &mut Heap<impl ResourceTracker>,
-    ) -> Result<Namespaces, PythonException> {
+    ) -> Result<Namespaces, MontyException> {
         let Some(extra) = self
             .namespace_size
             .checked_sub(self.external_function_ids.len() + inputs.len())
         else {
-            return Err(PythonException::runtime_error("too many inputs for namespace"));
+            return Err(MontyException::runtime_error("too many inputs for namespace"));
         };
         // register external functions in the namespace first, matching the logic in prepare
         let mut namespace: Vec<Value> = Vec::with_capacity(self.namespace_size);
@@ -477,7 +400,7 @@ impl Executor {
             namespace.push(
                 input
                     .to_value(heap, &self.interns)
-                    .map_err(|e| PythonException::runtime_error(format!("invalid input type: {e}")))?,
+                    .map_err(|e| MontyException::runtime_error(format!("invalid input type: {e}")))?,
             );
         }
         if extra > 0 {
@@ -488,14 +411,14 @@ impl Executor {
 
     /// Internal helper to run execution from a position stack.
     ///
-    /// Shared by both `RunSnapshot` and `Snapshot::run`.
+    /// Shared by both `MontyRun` and `Snapshot::run`.
     fn run_from_position<T: ResourceTracker>(
         self,
         mut heap: Heap<T>,
         mut namespaces: Namespaces,
         mut snapshot_tracker: SnapshotTracker,
         print: &mut impl PrintWriter,
-    ) -> Result<RunProgress<T>, PythonException> {
+    ) -> Result<RunProgress<T>, MontyException> {
         let mut frame = RunFrame::module_frame(&self.interns, &mut snapshot_tracker, print);
         let exit = match frame.execute(&mut namespaces, &mut heap, &self.nodes) {
             Ok(exit) => exit,

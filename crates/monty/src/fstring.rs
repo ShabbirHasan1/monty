@@ -7,7 +7,7 @@
 use std::str::FromStr;
 
 use crate::evaluate::{return_ext_call, EvalResult, EvaluateExpr};
-use crate::exception::{exc_err_fmt, exc_fmt, ExcType};
+use crate::exception_private::{exc_err_fmt, exc_fmt, ExcType};
 use crate::expressions::ExprLoc;
 
 use crate::heap::{Heap, HeapData};

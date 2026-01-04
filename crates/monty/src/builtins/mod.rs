@@ -34,7 +34,7 @@ use std::str::FromStr;
 use strum::{Display, EnumString, IntoStaticStr};
 
 use crate::args::ArgValues;
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
 use crate::heap::Heap;
 use crate::intern::Interns;
 use crate::io::PrintWriter;

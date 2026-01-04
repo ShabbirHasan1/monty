@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::error::PythonException;
+use crate::exception_public::MontyException;
 
 /// Trait for handling output from the `print()` builtin function.
 ///
@@ -16,7 +16,7 @@ pub trait PrintWriter {
     /// # Arguments
     /// * `output` - The formatted output string for a single argument (without
     ///   separators or trailing newline).
-    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), PythonException>;
+    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), MontyException>;
 
     /// Add a single character to stdout.
     ///
@@ -24,7 +24,7 @@ pub trait PrintWriter {
     ///
     /// # Arguments
     /// * `end` - The character to print after the formatted output.
-    fn stdout_push(&mut self, end: char) -> Result<(), PythonException>;
+    fn stdout_push(&mut self, end: char) -> Result<(), MontyException>;
 }
 
 /// Default `PrintWriter` that writes to stdout.
@@ -34,12 +34,12 @@ pub trait PrintWriter {
 pub struct StdPrint;
 
 impl PrintWriter for StdPrint {
-    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), PythonException> {
+    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), MontyException> {
         print!("{output}");
         Ok(())
     }
 
-    fn stdout_push(&mut self, end: char) -> Result<(), PythonException> {
+    fn stdout_push(&mut self, end: char) -> Result<(), MontyException> {
         print!("{end}");
         Ok(())
     }
@@ -78,12 +78,12 @@ impl CollectStringPrint {
 }
 
 impl PrintWriter for CollectStringPrint {
-    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), PythonException> {
+    fn stdout_write(&mut self, output: Cow<'_, str>) -> Result<(), MontyException> {
         self.0.push_str(&output);
         Ok(())
     }
 
-    fn stdout_push(&mut self, end: char) -> Result<(), PythonException> {
+    fn stdout_push(&mut self, end: char) -> Result<(), MontyException> {
         self.0.push(end);
         Ok(())
     }
@@ -96,11 +96,11 @@ impl PrintWriter for CollectStringPrint {
 pub struct NoPrint;
 
 impl PrintWriter for NoPrint {
-    fn stdout_write(&mut self, _output: Cow<'_, str>) -> Result<(), PythonException> {
+    fn stdout_write(&mut self, _output: Cow<'_, str>) -> Result<(), MontyException> {
         Ok(())
     }
 
-    fn stdout_push(&mut self, _end: char) -> Result<(), PythonException> {
+    fn stdout_push(&mut self, _end: char) -> Result<(), MontyException> {
         Ok(())
     }
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, IntoStaticStr};
 
 use crate::args::ArgValues;
-use crate::error::{PythonException, StackFrame};
+use crate::exception_public::{MontyException, StackFrame};
 use crate::expressions::ExprLoc;
 
 use crate::heap::{Heap, HeapData};
@@ -561,8 +561,8 @@ impl fmt::Display for SimpleException {
         self.py_repr_fmt(f)
     }
 }
-impl From<PythonException> for SimpleException {
-    fn from(exc: PythonException) -> Self {
+impl From<MontyException> for SimpleException {
+    fn from(exc: MontyException) -> Self {
         Self {
             exc_type: exc.exc_type(),
             arg: exc.into_message(),
@@ -695,21 +695,21 @@ impl SimpleException {
 
 macro_rules! exc_static {
     ($error_type:expr; $msg:expr) => {
-        crate::exception::SimpleException::new($error_type, Some($msg.into()))
+        crate::exception_private::SimpleException::new($error_type, Some($msg.into()))
     };
 }
 pub(crate) use exc_static;
 
 macro_rules! exc_fmt {
     ($error_type:expr; $($fmt_args:tt)*) => {
-        crate::exception::SimpleException::new($error_type, Some(format!($($fmt_args)*).into()))
+        crate::exception_private::SimpleException::new($error_type, Some(format!($($fmt_args)*).into()))
     };
 }
 pub(crate) use exc_fmt;
 
 macro_rules! exc_err_static {
     ($error_type:expr; $msg:expr) => {
-        Err(crate::exception::exc_static!($error_type; $msg).into())
+        Err(crate::exception_private::exc_static!($error_type; $msg).into())
     };
 }
 pub(crate) use exc_err_static;
@@ -717,7 +717,7 @@ pub(crate) use exc_err_static;
 // TODO remove this, we should always set position before creating the Err
 macro_rules! exc_err_fmt {
     ($error_type:expr; $($fmt_args:tt)*) => {
-        Err(crate::exception::exc_fmt!($error_type; $($fmt_args)*).into())
+        Err(crate::exception_private::exc_fmt!($error_type; $($fmt_args)*).into())
     };
 }
 pub(crate) use exc_err_fmt;
@@ -736,8 +736,8 @@ impl From<SimpleException> for ExceptionRaise {
     }
 }
 
-impl From<PythonException> for ExceptionRaise {
-    fn from(exc: PythonException) -> Self {
+impl From<MontyException> for ExceptionRaise {
+    fn from(exc: MontyException) -> Self {
         Self {
             exc: exc.into(),
             frame: None,
@@ -784,12 +784,12 @@ impl ExceptionRaise {
         }
     }
 
-    /// Converts this exception to a `PythonException` for the public API.
+    /// Converts this exception to a `MontyException` for the public API.
     ///
     /// Uses `Interns` to resolve `StringId` references to actual strings.
     /// Extracts preview lines from the source code for traceback display.
     #[must_use]
-    pub fn into_python_exception(self, interns: &Interns, source: &str) -> PythonException {
+    pub fn into_python_exception(self, interns: &Interns, source: &str) -> MontyException {
         let traceback = self
             .frame
             .map(|frame| {
@@ -805,7 +805,7 @@ impl ExceptionRaise {
             })
             .unwrap_or_default();
 
-        PythonException::new_full(self.exc.exc_type(), self.exc.arg().cloned(), traceback)
+        MontyException::new_full(self.exc.exc_type(), self.exc.arg().cloned(), traceback)
     }
 }
 
@@ -885,21 +885,21 @@ impl From<SimpleException> for RunError {
     }
 }
 
-impl From<PythonException> for RunError {
-    fn from(exc: PythonException) -> Self {
+impl From<MontyException> for RunError {
+    fn from(exc: MontyException) -> Self {
         Self::Exc(exc.into())
     }
 }
 
 impl RunError {
-    /// Converts this runtime error to a `PythonException` for the public API.
+    /// Converts this runtime error to a `MontyException` for the public API.
     ///
     /// Internal errors are converted to `RuntimeError` exceptions with no traceback.
     #[must_use]
-    pub fn into_python_exception(self, interns: &Interns, source: &str) -> PythonException {
+    pub fn into_python_exception(self, interns: &Interns, source: &str) -> MontyException {
         match self {
             Self::Exc(exc) | Self::UncatchableExc(exc) => exc.into_python_exception(interns, source),
-            Self::Internal(err) => PythonException::runtime_error(format!("Internal error in monty: {err}")),
+            Self::Internal(err) => MontyException::runtime_error(format!("Internal error in monty: {err}")),
         }
     }
 

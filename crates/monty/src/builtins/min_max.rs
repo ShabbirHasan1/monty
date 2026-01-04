@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use crate::args::ArgValues;
-use crate::exception::{exc_err_fmt, ExcType};
+use crate::exception_private::{exc_err_fmt, ExcType};
 use crate::for_iterator::ForIterator;
 use crate::heap::Heap;
 use crate::intern::Interns;

@@ -1,7 +1,7 @@
 //! Implementation of the print() builtin function.
 
 use crate::args::{ArgValues, KwargsValues};
-use crate::exception::{exc_err_fmt, exc_fmt, ExcType, RunError};
+use crate::exception_private::{exc_err_fmt, exc_fmt, ExcType, RunError};
 use crate::heap::{Heap, HeapData};
 use crate::intern::Interns;
 use crate::io::PrintWriter;

@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use crate::{
     args::ArgValues,
-    exception::{ExcType, RunError},
+    exception_private::{ExcType, RunError},
     expressions::{ExprLoc, Identifier, Node},
     heap::{Heap, HeapId},
     intern::Interns,

@@ -1,7 +1,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::exception::{ExceptionRaise, RawStackFrame, RunError, SimpleException};
+use crate::exception_private::{ExceptionRaise, RawStackFrame, RunError, SimpleException};
 use crate::ExcType;
 
 /// Error returned when a resource limit is exceeded during execution.

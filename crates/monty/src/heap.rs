@@ -6,7 +6,7 @@ use std::mem::discriminant;
 use ahash::AHashSet;
 
 use crate::args::ArgValues;
-use crate::exception::{ExcType, SimpleException};
+use crate::exception_private::{ExcType, SimpleException};
 use crate::intern::{FunctionId, Interns};
 use crate::resource::{ResourceError, ResourceTracker};
 use crate::run_frame::RunResult;

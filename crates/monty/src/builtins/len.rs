@@ -1,7 +1,7 @@
 //! Implementation of the len() builtin function.
 
 use crate::args::ArgValues;
-use crate::exception::{exc_err_fmt, ExcType};
+use crate::exception_private::{exc_err_fmt, ExcType};
 use crate::heap::Heap;
 use crate::intern::Interns;
 use crate::resource::ResourceTracker;

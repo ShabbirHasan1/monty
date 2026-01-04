@@ -1,18 +1,18 @@
 //! Exception mapping between Monty and Python.
 //!
-//! Converts Monty's `PythonException` and `ExcType` to PyO3's `PyErr`
+//! Converts Monty's `MontyException` and `ExcType` to PyO3's `PyErr`
 //! so that Python code sees native Python exceptions.
 
-use ::monty::{ExcType, PythonException};
+use ::monty::{ExcType, MontyException};
 use pyo3::exceptions::{self, PyBaseException};
 use pyo3::prelude::*;
 
-/// Converts Monty's `PythonException` to a Python exception.
+/// Converts Monty's `MontyException` to a Python exception.
 ///
 /// Creates an appropriate Python exception type with the message.
 /// The traceback information is included in the exception message
 /// since PyO3 doesn't provide direct traceback manipulation.
-pub fn exc_monty_to_py(exc: PythonException) -> PyErr {
+pub fn exc_monty_to_py(exc: MontyException) -> PyErr {
     let exc_type = exc.exc_type();
     let msg = exc.into_message().unwrap_or_default();
 
@@ -39,12 +39,12 @@ pub fn exc_monty_to_py(exc: PythonException) -> PyErr {
 }
 
 /// Converts a python exception to monty.
-pub fn exc_py_to_monty(py: Python<'_>, py_err: PyErr) -> PythonException {
+pub fn exc_py_to_monty(py: Python<'_>, py_err: PyErr) -> MontyException {
     let exc = py_err.value(py);
     let exc_type = py_err_to_exc_type(exc);
     let arg = exc.str().ok().map(|s| s.to_string_lossy().into_owned());
 
-    PythonException::new(exc_type, arg)
+    MontyException::new(exc_type, arg)
 }
 
 /// Converts a Python exception to Monty's `MontyObject::Exception`.

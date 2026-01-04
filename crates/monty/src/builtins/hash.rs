@@ -1,7 +1,7 @@
 //! Implementation of the hash() builtin function.
 
 use crate::args::ArgValues;
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
 use crate::heap::Heap;
 use crate::intern::Interns;
 use crate::resource::ResourceTracker;

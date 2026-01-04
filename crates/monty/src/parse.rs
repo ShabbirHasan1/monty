@@ -12,8 +12,8 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::args::{ArgExprs, Kwarg};
 use crate::builtins::Builtins;
 use crate::callable::Callable;
-use crate::error::{CodeLoc, PythonException};
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
+use crate::exception_public::{CodeLoc, MontyException};
 use crate::expressions::{Expr, ExprLoc, Identifier, Literal};
 use crate::fstring::{ConversionFlag, FStringPart, FormatSpec};
 use crate::intern::{InternerBuilder, StringId};
@@ -1063,14 +1063,14 @@ impl ParseError {
 }
 
 impl ParseError {
-    pub fn into_python_exc(self, filename: &str, source: &str) -> PythonException {
+    pub fn into_python_exc(self, filename: &str, source: &str) -> MontyException {
         match self {
-            ParseError::Syntax { msg, position } => PythonException::new_full(
+            ParseError::Syntax { msg, position } => MontyException::new_full(
                 ExcType::SyntaxError,
                 Some(msg.into_owned()),
                 vec![StackFrame::from_position(position, filename, source)],
             ),
-            ParseError::NotImplemented(msg) => PythonException::new(
+            ParseError::NotImplemented(msg) => MontyException::new(
                 ExcType::NotImplementedError,
                 Some(format!("The monty syntax parser does not yet support {msg}")),
             ),

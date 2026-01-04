@@ -1,7 +1,7 @@
 //! Implementation of the isinstance() builtin function.
 
 use crate::args::ArgValues;
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
 use crate::heap::{Heap, HeapData};
 use crate::resource::ResourceTracker;
 use crate::run_frame::RunResult;

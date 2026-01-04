@@ -2,9 +2,9 @@
 mod args;
 mod builtins;
 mod callable;
-mod error;
 mod evaluate;
-mod exception;
+mod exception_private;
+mod exception_public;
 mod expressions;
 mod for_iterator;
 mod fstring;
@@ -25,12 +25,12 @@ mod snapshot;
 mod types;
 mod value;
 
-pub use crate::error::{CodeLoc, PythonException, StackFrame};
-pub use crate::exception::ExcType;
+pub use crate::exception_private::ExcType;
+pub use crate::exception_public::{CodeLoc, MontyException, StackFrame};
 pub use crate::io::{CollectStringPrint, NoPrint, PrintWriter, StdPrint};
 pub use crate::object::{InvalidInputError, MontyObject};
 pub use crate::resource::{LimitedTracker, NoLimitTracker, ResourceLimits, ResourceTracker};
-pub use crate::run::{Executor, RunProgress, RunSnapshot, Snapshot};
+pub use crate::run::{MontyRun, RunProgress, Snapshot};
 
 #[cfg(feature = "ref-count-return")]
 pub use crate::run::RefCountOutput;

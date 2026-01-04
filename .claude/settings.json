@@ -33,7 +33,8 @@
       "Bash(rustup show:*)",
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:15r10nk.github.io)"
+      "WebFetch(domain:15r10nk.github.io)",
+      "WebFetch(domain:docs.rs)"
     ],
     "deny": [],
     "ask": []

@@ -4,9 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use ahash::AHashMap;
-use monty::{
-    Executor, LimitedTracker, MontyObject, PythonException, ResourceLimits, RunProgress, RunSnapshot, StdPrint,
-};
+use monty::{LimitedTracker, MontyException, MontyObject, MontyRun, ResourceLimits, RunProgress, StdPrint};
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -36,7 +34,7 @@ struct TestConfig {
     xfail_monty: bool,
     /// When true, test is expected to fail on CPython (strict xfail).
     xfail_cpython: bool,
-    /// When true, use RunSnapshot with external function support instead of Executor.
+    /// When true, use MontyRun with external function support instead of MontyRun.
     iter_mode: bool,
 }
 
@@ -307,7 +305,7 @@ impl std::fmt::Display for TestFailure {
 
 /// Try to run a test, returning Ok(()) on success or Err with failure details.
 ///
-/// This function executes Python code via the Executor and validates the result
+/// This function executes Python code via the MontyRun and validates the result
 /// against the expected outcome specified in the fixture.
 fn try_run_test(path: &Path, code: &str, expectation: &Expectation) -> Result<(), TestFailure> {
     let test_name = path.strip_prefix("test_cases/").unwrap_or(path).display().to_string();
@@ -315,7 +313,7 @@ fn try_run_test(path: &Path, code: &str, expectation: &Expectation) -> Result<()
     // Handle ref-count-return tests separately since they need run_ref_counts()
     #[cfg(feature = "ref-count-return")]
     if let Expectation::RefCounts(expected) = expectation {
-        match Executor::new(code.to_owned(), &test_name, vec![]) {
+        match MontyRun::new(code.to_owned(), &test_name, vec![], vec![]) {
             Ok(ex) => {
                 let result = ex.run_ref_counts(vec![]);
                 match result {
@@ -365,10 +363,10 @@ fn try_run_test(path: &Path, code: &str, expectation: &Expectation) -> Result<()
         }
     }
 
-    match Executor::new(code.to_owned(), &test_name, vec![]) {
+    match MontyRun::new(code.to_owned(), &test_name, vec![], vec![]) {
         Ok(ex) => {
             let limits = ResourceLimits::new().max_recursion_depth(Some(TEST_RECURSION_LIMIT));
-            let result = ex.run_with_limits(vec![], limits);
+            let result = ex.run(vec![], LimitedTracker::new(limits), &mut StdPrint);
             match result {
                 Ok(obj) => match expectation {
                     Expectation::ReturnStr(expected) => {
@@ -488,7 +486,7 @@ fn try_run_test(path: &Path, code: &str, expectation: &Expectation) -> Result<()
     Ok(())
 }
 
-/// Try to run a test using RunSnapshot with external function support.
+/// Try to run a test using MontyRun with external function support.
 ///
 /// This function handles tests marked with `# mode: iter` directive by using the
 /// iterative executor API and providing implementations for predefined external functions.
@@ -508,7 +506,7 @@ fn try_run_iter_test(path: &Path, code: &str, expectation: &Expectation) -> Resu
 
     let ext_functions: Vec<String> = ITER_EXT_FUNCTIONS.iter().copied().map(str::to_string).collect();
 
-    let exec = match RunSnapshot::new(code.to_owned(), &test_name, vec![], ext_functions) {
+    let exec = match MontyRun::new(code.to_owned(), &test_name, vec![], ext_functions) {
         Ok(e) => e,
         Err(parse_err) => {
             if let Expectation::Raise(expected) = expectation {
@@ -630,9 +628,9 @@ fn try_run_iter_test(path: &Path, code: &str, expectation: &Expectation) -> Resu
 }
 
 /// Execute the iter loop, dispatching external function calls until complete.
-fn run_iter_loop(exec: RunSnapshot) -> Result<MontyObject, PythonException> {
+fn run_iter_loop(exec: MontyRun) -> Result<MontyObject, MontyException> {
     let limits = ResourceLimits::new().max_recursion_depth(Some(TEST_RECURSION_LIMIT));
-    let mut progress = exec.run_snapshot(vec![], LimitedTracker::new(limits), &mut StdPrint)?;
+    let mut progress = exec.start(vec![], LimitedTracker::new(limits), &mut StdPrint)?;
 
     loop {
         match progress {

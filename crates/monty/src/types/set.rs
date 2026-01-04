@@ -4,7 +4,7 @@ use ahash::AHashSet;
 use hashbrown::HashTable;
 
 use crate::args::ArgValues;
-use crate::exception::ExcType;
+use crate::exception_private::ExcType;
 use crate::for_iterator::ForIterator;
 use crate::heap::{Heap, HeapData, HeapId};
 use crate::intern::Interns;

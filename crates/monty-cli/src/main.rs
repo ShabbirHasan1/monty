@@ -3,7 +3,9 @@ use std::fs;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use monty::{MontyObject, NoLimitTracker, RunProgress, RunSnapshot, StdPrint};
+use monty::{MontyObject, MontyRun, NoLimitTracker, RunProgress, StdPrint};
+
+const EXT_FUNCTIONS: bool = false;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -19,28 +21,7 @@ fn main() -> ExitCode {
     let inputs = vec![];
     let ext_functions = vec!["add_ints".to_owned()];
 
-    // let ex = match Executor::new(code, file_path, input_names) {
-    //     Ok(ex) => ex,
-    //     Err(err) => {
-    //         eprintln!("error:\n{err}");
-    //         return ExitCode::FAILURE;
-    //     }
-    // };
-
-    // let start = Instant::now();
-    // let value = match ex.run_no_limits(inputs) {
-    //     Ok(p) => p,
-    //     Err(err) => {
-    //         let elapsed = start.elapsed();
-    //         eprintln!("error after: {elapsed:?}\n{err}");
-    //         return ExitCode::FAILURE;
-    //     }
-    // };
-    // let elapsed = start.elapsed();
-    // eprintln!("success after: {elapsed:?}\n{value}");
-    // return ExitCode::SUCCESS;
-
-    let ex = match RunSnapshot::new(code, file_path, input_names, ext_functions) {
+    let runner = match MontyRun::new(code, file_path, input_names, ext_functions) {
         Ok(ex) => ex,
         Err(err) => {
             eprintln!("error:\n{err}");
@@ -48,61 +29,76 @@ fn main() -> ExitCode {
         }
     };
 
-    let start = Instant::now();
-    let mut progress = match ex.run_snapshot(inputs, NoLimitTracker::default(), &mut StdPrint) {
-        Ok(p) => p,
-        Err(err) => {
-            let elapsed = start.elapsed();
-            eprintln!("error after: {elapsed:?}\n{err}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // Handle external function calls in a loop
-    loop {
-        match progress {
-            RunProgress::Complete(value) => {
+    if EXT_FUNCTIONS {
+        let start = Instant::now();
+        let mut progress = match runner.start(inputs, NoLimitTracker::default(), &mut StdPrint) {
+            Ok(p) => p,
+            Err(err) => {
                 let elapsed = start.elapsed();
-                eprintln!("success after: {elapsed:?}\n{value}");
-                return ExitCode::SUCCESS;
+                eprintln!("error after: {elapsed:?}\n{err}");
+                return ExitCode::FAILURE;
             }
-            RunProgress::FunctionCall {
-                function_name,
-                args,
-                state,
-                ..
-            } => {
-                let return_value = if function_name == "add_ints" {
-                    // Extract two integer arguments and add them
-                    if args.len() != 2 {
-                        eprintln!("add_ints requires exactly 2 arguments, got {}", args.len());
-                        return ExitCode::FAILURE;
-                    }
-                    if let (MontyObject::Int(a), MontyObject::Int(b)) = (&args[0], &args[1]) {
-                        let ret = MontyObject::Int(a + b);
-                        eprintln!("Function call: {function_name}({args:?}) -> {ret:?}");
-                        ret
-                    } else {
-                        eprintln!("add_ints requires integer arguments, got {args:?}");
-                        return ExitCode::FAILURE;
-                    }
-                } else {
-                    let elapsed = start.elapsed();
-                    eprintln!("{elapsed:?}, unknown external function: {function_name}({args:?})");
-                    return ExitCode::FAILURE;
-                };
+        };
 
-                // Resume execution with the return value
-                match state.run(return_value, &mut StdPrint) {
-                    Ok(p) => progress = p,
-                    Err(err) => {
+        // Handle external function calls in a loop
+        loop {
+            match progress {
+                RunProgress::Complete(value) => {
+                    let elapsed = start.elapsed();
+                    eprintln!("success after: {elapsed:?}\n{value}");
+                    return ExitCode::SUCCESS;
+                }
+                RunProgress::FunctionCall {
+                    function_name,
+                    args,
+                    state,
+                    ..
+                } => {
+                    let return_value = if function_name == "add_ints" {
+                        // Extract two integer arguments and add them
+                        if args.len() != 2 {
+                            eprintln!("add_ints requires exactly 2 arguments, got {}", args.len());
+                            return ExitCode::FAILURE;
+                        }
+                        if let (MontyObject::Int(a), MontyObject::Int(b)) = (&args[0], &args[1]) {
+                            let ret = MontyObject::Int(a + b);
+                            eprintln!("Function call: {function_name}({args:?}) -> {ret:?}");
+                            ret
+                        } else {
+                            eprintln!("add_ints requires integer arguments, got {args:?}");
+                            return ExitCode::FAILURE;
+                        }
+                    } else {
                         let elapsed = start.elapsed();
-                        eprintln!("error after: {elapsed:?}\n{err}");
+                        eprintln!("{elapsed:?}, unknown external function: {function_name}({args:?})");
                         return ExitCode::FAILURE;
+                    };
+
+                    // Resume execution with the return value
+                    match state.run(return_value, &mut StdPrint) {
+                        Ok(p) => progress = p,
+                        Err(err) => {
+                            let elapsed = start.elapsed();
+                            eprintln!("error after: {elapsed:?}\n{err}");
+                            return ExitCode::FAILURE;
+                        }
                     }
                 }
             }
         }
+    } else {
+        let start = Instant::now();
+        let value = match runner.run_no_limits(inputs) {
+            Ok(p) => p,
+            Err(err) => {
+                let elapsed = start.elapsed();
+                eprintln!("error after: {elapsed:?}\n{err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let elapsed = start.elapsed();
+        eprintln!("success after: {elapsed:?}\n{value}");
+        ExitCode::SUCCESS
     }
 }
 

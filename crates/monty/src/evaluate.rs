@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use crate::args::{ArgExprs, ArgValues, Kwarg, KwargsValues};
 use crate::callable::Callable;
-use crate::exception::{exc_err_fmt, ExcType, RunError, SimpleException};
+use crate::exception_private::{exc_err_fmt, ExcType, RunError, SimpleException};
 use crate::expressions::{Expr, ExprLoc, Identifier, NameScope};
 use crate::fstring::{fstring_interpolation, ConversionFlag, FStringPart};
 
@@ -172,7 +172,7 @@ impl<'h, 's, T: ResourceTracker, W: PrintWriter> EvaluateExpr<'h, 's, T, W> {
                     Value::Int(n) => Ok(EvalResult::Value(Value::Int(-n))),
                     Value::Float(f) => Ok(EvalResult::Value(Value::Float(-f))),
                     _ => {
-                        use crate::exception::{exc_fmt, ExcType};
+                        use crate::exception_private::{exc_fmt, ExcType};
                         let type_name = val.py_type(Some(self.heap));
                         // Drop the value before returning error to avoid ref counting leak
                         val.drop_with_heap(self.heap);

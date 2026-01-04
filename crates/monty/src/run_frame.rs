@@ -1,6 +1,8 @@
 use crate::args::ArgValues;
 use crate::evaluate::{EvalResult, EvaluateExpr, ExternalCall};
-use crate::exception::{exc_err_static, exc_fmt, ExcType, ExceptionRaise, RawStackFrame, RunError, SimpleException};
+use crate::exception_private::{
+    exc_err_static, exc_fmt, ExcType, ExceptionRaise, RawStackFrame, RunError, SimpleException,
+};
 use crate::expressions::{ExprLoc, Identifier, NameScope, Node};
 use crate::for_iterator::ForIterator;
 use crate::heap::{Heap, HeapData};

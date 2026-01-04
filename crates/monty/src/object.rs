@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     builtins::Builtins,
-    exception::{ExcType, SimpleException},
+    exception_private::{ExcType, SimpleException},
     heap::{Heap, HeapData, HeapId},
     intern::Interns,
     resource::{ResourceError, ResourceTracker},

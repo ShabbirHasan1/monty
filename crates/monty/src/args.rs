@@ -1,7 +1,7 @@
 use std::vec::IntoIter;
 
 use crate::{
-    exception::ExcType,
+    exception_private::ExcType,
     expressions::{ExprLoc, Identifier},
     heap::Heap,
     intern::{Interns, StringId},
