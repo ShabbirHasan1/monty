@@ -7,7 +7,7 @@ use crate::{
     intern::StringId,
     io::PrintWriter,
     resource::ResourceTracker,
-    types::{Dict, List, PyTrait, Set, Str, Tuple},
+    types::{Dict, List, PyTrait, Set, Str, Tuple, Type},
     value::Value,
 };
 
@@ -295,7 +295,7 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
             return Ok(());
         }
 
-        // First, copy values without incrementing refcounts (avoids borrow conflict)
+        // First, copy values without incrementing refcounts (avoids borrow conflict with heap.get)
         // For strings, we need to allocate new string values for each character
         let items: Vec<Value> = if let Value::Ref(heap_id) = &value {
             match self.heap.get(*heap_id) {
@@ -337,24 +337,30 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
                     }
                     return Ok(());
                 }
-                _ => {
+                other => {
+                    let type_name = other.py_type(Some(self.heap));
                     value.drop_with_heap(self.heap);
-                    return Err(ExcType::type_error("cannot unpack non-sequence"));
+                    return Err(unpack_type_error(type_name));
                 }
             }
         } else {
+            let type_name = value.py_type(Some(self.heap));
             value.drop_with_heap(self.heap);
-            return Err(ExcType::type_error("cannot unpack non-sequence"));
+            return Err(unpack_type_error(type_name));
         };
 
-        value.drop_with_heap(self.heap);
-
-        // Now increment refcounts for all copied values
+        // IMPORTANT: Increment refcounts BEFORE dropping the container.
+        // The container holds references to its items. If we drop the container first,
+        // it decrements the item refcounts, potentially freeing them before we can
+        // increment the refcounts for our copies.
         for item in &items {
             if let Value::Ref(id) = item {
                 self.heap.inc_ref(*id);
             }
         }
+
+        // Now safe to drop the original container
+        value.drop_with_heap(self.heap);
 
         // Push items in reverse order so first item is on top
         for item in items.into_iter().rev() {
@@ -368,12 +374,21 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
 ///
 /// Python uses different messages depending on whether there are too few or too many values:
 /// - Too few: "not enough values to unpack (expected X, got Y)"
-/// - Too many: "too many values to unpack (expected X)"
+/// - Too many: "too many values to unpack (expected X, got Y)"
 fn unpack_size_error(expected: usize, actual: usize) -> RunError {
     let message = if actual < expected {
         format!("not enough values to unpack (expected {expected}, got {actual})")
     } else {
-        format!("too many values to unpack (expected {expected})")
+        format!("too many values to unpack (expected {expected}, got {actual})")
     };
     SimpleException::new(ExcType::ValueError, Some(message)).into()
+}
+
+/// Creates a TypeError for attempting to unpack a non-iterable type.
+fn unpack_type_error(type_name: Type) -> RunError {
+    SimpleException::new(
+        ExcType::TypeError,
+        Some(format!("cannot unpack non-iterable {type_name} object")),
+    )
+    .into()
 }
