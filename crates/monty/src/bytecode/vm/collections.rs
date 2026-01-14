@@ -269,23 +269,41 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
     // ========================================================================
 
     /// Unpacks a sequence into n values on the stack.
+    ///
+    /// Supports lists, tuples, and strings. For strings, each character becomes
+    /// a separate single-character string.
     pub(super) fn unpack_sequence(&mut self, count: usize) -> Result<(), RunError> {
         let value = self.pop();
 
+        // Handle interned strings (string literals stored inline, not on heap)
+        if let Value::InternString(string_id) = &value {
+            let s = self.interns.get_str(*string_id);
+            let str_len = s.chars().count();
+            if str_len != count {
+                return Err(unpack_size_error(count, str_len));
+            }
+            // Allocate each character as a new string
+            let mut items = Vec::with_capacity(str_len);
+            for c in s.chars() {
+                let char_id = self.heap.allocate(HeapData::Str(Str::new(c.to_string())))?;
+                items.push(Value::Ref(char_id));
+            }
+            // Push items in reverse order so first item is on top
+            for item in items.into_iter().rev() {
+                self.push(item);
+            }
+            return Ok(());
+        }
+
         // First, copy values without incrementing refcounts (avoids borrow conflict)
+        // For strings, we need to allocate new string values for each character
         let items: Vec<Value> = if let Value::Ref(heap_id) = &value {
             match self.heap.get(*heap_id) {
                 HeapData::List(list) => {
                     let list_len = list.len();
                     if list_len != count {
                         value.drop_with_heap(self.heap);
-                        return Err(SimpleException::new(
-                            ExcType::ValueError,
-                            Some(format!(
-                                "not enough values to unpack (expected {count}, got {list_len})"
-                            )),
-                        )
-                        .into());
+                        return Err(unpack_size_error(count, list_len));
                     }
                     list.as_vec().iter().map(Value::copy_for_extend).collect()
                 }
@@ -293,15 +311,31 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
                     let tuple_len = tuple.as_vec().len();
                     if tuple_len != count {
                         value.drop_with_heap(self.heap);
-                        return Err(SimpleException::new(
-                            ExcType::ValueError,
-                            Some(format!(
-                                "not enough values to unpack (expected {count}, got {tuple_len})"
-                            )),
-                        )
-                        .into());
+                        return Err(unpack_size_error(count, tuple_len));
                     }
                     tuple.as_vec().iter().map(Value::copy_for_extend).collect()
+                }
+                HeapData::Str(s) => {
+                    let str_len = s.as_str().chars().count();
+                    if str_len != count {
+                        value.drop_with_heap(self.heap);
+                        return Err(unpack_size_error(count, str_len));
+                    }
+                    // Collect characters first to avoid borrow conflict with heap
+                    let chars: Vec<char> = s.as_str().chars().collect();
+                    // Drop the original string value before allocating new ones
+                    value.drop_with_heap(self.heap);
+                    // Allocate each character as a new string
+                    let mut items = Vec::with_capacity(chars.len());
+                    for c in chars {
+                        let char_id = self.heap.allocate(HeapData::Str(Str::new(c.to_string())))?;
+                        items.push(Value::Ref(char_id));
+                    }
+                    // Skip the later drop since we already dropped
+                    for item in items.into_iter().rev() {
+                        self.push(item);
+                    }
+                    return Ok(());
                 }
                 _ => {
                     value.drop_with_heap(self.heap);
@@ -328,4 +362,18 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
         }
         Ok(())
     }
+}
+
+/// Creates the appropriate ValueError for unpacking size mismatches.
+///
+/// Python uses different messages depending on whether there are too few or too many values:
+/// - Too few: "not enough values to unpack (expected X, got Y)"
+/// - Too many: "too many values to unpack (expected X)"
+fn unpack_size_error(expected: usize, actual: usize) -> RunError {
+    let message = if actual < expected {
+        format!("not enough values to unpack (expected {expected}, got {actual})")
+    } else {
+        format!("too many values to unpack (expected {expected})")
+    };
+    SimpleException::new(ExcType::ValueError, Some(message)).into()
 }
