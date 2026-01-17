@@ -558,82 +558,91 @@ impl<'a, T: ResourceTracker, P: PrintWriter> VM<'a, T, P> {
                 Opcode::UnaryNeg => {
                     // Unary minus - negate numeric value
                     let value = self.pop();
-                    let value_type = value.py_type(self.heap);
-                    let result: Result<Option<Value>, crate::resource::ResourceError> = match &value {
+                    match value {
                         Value::Int(n) => {
                             // Use checked_neg to handle i64::MIN overflow
                             if let Some(negated) = n.checked_neg() {
-                                Ok(Some(Value::Int(negated)))
+                                self.push(Value::Int(negated));
                             } else {
                                 // i64::MIN negated overflows to LongInt
-                                let li = -LongInt::from(*n);
-                                li.into_value(self.heap).map(Some)
+                                let li = -LongInt::from(n);
+                                match li.into_value(self.heap) {
+                                    Ok(v) => self.push(v),
+                                    Err(e) => catch_sync!(self, cached_frame, RunError::from(e)),
+                                }
                             }
                         }
-                        Value::Float(f) => Ok(Some(Value::Float(-f))),
-                        Value::Bool(b) => Ok(Some(Value::Int(if *b { -1 } else { 0 }))),
+                        Value::Float(f) => self.push(Value::Float(-f)),
+                        Value::Bool(b) => self.push(Value::Int(if b { -1 } else { 0 })),
                         Value::Ref(id) => {
-                            if let HeapData::LongInt(li) = self.heap.get(*id) {
+                            if let HeapData::LongInt(li) = self.heap.get(id) {
                                 let negated = -LongInt::new(li.inner().clone());
-                                negated.into_value(self.heap).map(Some)
+                                value.drop_with_heap(self.heap);
+                                match negated.into_value(self.heap) {
+                                    Ok(v) => self.push(v),
+                                    Err(e) => catch_sync!(self, cached_frame, RunError::from(e)),
+                                }
                             } else {
-                                Ok(None) // Not a LongInt - unsupported type
+                                let value_type = value.py_type(self.heap);
+                                value.drop_with_heap(self.heap);
+                                catch_sync!(self, cached_frame, ExcType::unary_type_error("-", value_type));
                             }
                         }
-                        _ => Ok(None), // Unsupported type
-                    };
-                    value.drop_with_heap(self.heap);
-                    match result {
-                        Ok(Some(v)) => self.push(v),
-                        Ok(None) => {
+                        _ => {
+                            let value_type = value.py_type(self.heap);
+                            value.drop_with_heap(self.heap);
                             catch_sync!(self, cached_frame, ExcType::unary_type_error("-", value_type));
-                        }
-                        Err(e) => {
-                            catch_sync!(self, cached_frame, RunError::from(e));
                         }
                     }
                 }
                 Opcode::UnaryPos => {
-                    // Unary plus - typically a no-op for numbers
+                    // Unary plus - converts bools to int, no-op for other numbers
                     let value = self.pop();
-                    let value_type = value.py_type(self.heap);
-                    let result = match &value {
-                        Value::Int(_) | Value::Float(_) | Value::Bool(_) => Some(value.clone_immediate()),
-                        _ => None,
-                    };
-                    value.drop_with_heap(self.heap);
-                    if let Some(v) = result {
-                        self.push(v);
-                    } else {
-                        catch_sync!(self, cached_frame, ExcType::unary_type_error("+", value_type));
+                    match value {
+                        Value::Int(_) | Value::Float(_) => self.push(value),
+                        Value::Bool(b) => self.push(Value::Int(i64::from(b))),
+                        Value::Ref(id) => {
+                            if matches!(self.heap.get(id), HeapData::LongInt(_)) {
+                                // LongInt - return as-is (value already has correct refcount)
+                                self.push(value);
+                            } else {
+                                let value_type = value.py_type(self.heap);
+                                value.drop_with_heap(self.heap);
+                                catch_sync!(self, cached_frame, ExcType::unary_type_error("+", value_type));
+                            }
+                        }
+                        _ => {
+                            let value_type = value.py_type(self.heap);
+                            value.drop_with_heap(self.heap);
+                            catch_sync!(self, cached_frame, ExcType::unary_type_error("+", value_type));
+                        }
                     }
                 }
                 Opcode::UnaryInvert => {
                     // Bitwise NOT
                     let value = self.pop();
-                    let value_type = value.py_type(self.heap);
-                    let result: Result<Option<Value>, crate::resource::ResourceError> = match &value {
-                        Value::Int(n) => Ok(Some(Value::Int(!n))),
-                        Value::Bool(b) => Ok(Some(Value::Int(!i64::from(*b)))),
+                    match value {
+                        Value::Int(n) => self.push(Value::Int(!n)),
+                        Value::Bool(b) => self.push(Value::Int(!i64::from(b))),
                         Value::Ref(id) => {
-                            if let HeapData::LongInt(li) = self.heap.get(*id) {
+                            if let HeapData::LongInt(li) = self.heap.get(id) {
                                 // LongInt bitwise NOT: ~x = -(x + 1)
                                 let inverted = -(li.inner() + 1i32);
-                                LongInt::new(inverted).into_value(self.heap).map(Some)
+                                value.drop_with_heap(self.heap);
+                                match LongInt::new(inverted).into_value(self.heap) {
+                                    Ok(v) => self.push(v),
+                                    Err(e) => catch_sync!(self, cached_frame, RunError::from(e)),
+                                }
                             } else {
-                                Ok(None) // Not a LongInt - unsupported type
+                                let value_type = value.py_type(self.heap);
+                                value.drop_with_heap(self.heap);
+                                catch_sync!(self, cached_frame, ExcType::unary_type_error("~", value_type));
                             }
                         }
-                        _ => Ok(None), // Unsupported type
-                    };
-                    value.drop_with_heap(self.heap);
-                    match result {
-                        Ok(Some(v)) => self.push(v),
-                        Ok(None) => {
+                        _ => {
+                            let value_type = value.py_type(self.heap);
+                            value.drop_with_heap(self.heap);
                             catch_sync!(self, cached_frame, ExcType::unary_type_error("~", value_type));
-                        }
-                        Err(e) => {
-                            catch_sync!(self, cached_frame, RunError::from(e));
                         }
                     }
                 }
