@@ -278,4 +278,20 @@ pub trait PyTrait {
         )
         .into())
     }
+
+    /// Deletes an item from this value, e.g. `del obj[key]`
+    ///
+    /// Returns Ok(()) on success, or an error if the key doesn't exist or deletion isn't supported
+    /// Takes ownership of `key` and drops it on error
+    ///
+    /// The `interns` parameter provides access to interned string content
+    ///
+    /// Default implementation returns TypeError
+    fn py_delitem(&mut self, _key: Value, heap: &mut Heap<impl ResourceTracker>, _interns: &Interns) -> RunResult<()> {
+        Err(SimpleException::new_msg(
+            ExcType::TypeError,
+            format!("'{}' object does not support item deletion", self.py_type(heap)),
+        )
+        .into())
+    }
 }

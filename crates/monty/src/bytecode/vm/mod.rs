@@ -744,12 +744,13 @@ impl<'a, T: ResourceTracker, P: PrintWriter> VM<'a, T, P> {
                     }
                 }
                 Opcode::DeleteSubscr => {
-                    // TODO: Implement py_delitem on Value
                     let index = self.pop();
-                    let obj = self.pop();
+                    let mut obj = self.pop();
+                    let result = obj.py_delitem(index, self.heap, self.interns);
                     obj.drop_with_heap(self.heap);
-                    index.drop_with_heap(self.heap);
-                    todo!("DeleteSubscr: py_delitem not yet implemented")
+                    if let Err(e) = result {
+                        catch_sync!(self, cached_frame, e);
+                    }
                 }
                 Opcode::LoadAttr => {
                     let name_idx = fetch_u16!(cached_frame);

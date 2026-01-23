@@ -346,6 +346,20 @@ impl<'i> Prepare<'i> {
                         target_position,
                     });
                 }
+                Node::SubscriptDelete {
+                    target,
+                    index,
+                    target_position,
+                } => {
+                    // SubscriptDelete doesn't assign to the target itself, just modifies it
+                    let target = self.get_id(target).0;
+                    let index = self.prepare_expression(index)?;
+                    new_nodes.push(Node::SubscriptDelete {
+                        target,
+                        index,
+                        target_position,
+                    });
+                }
                 Node::AttrAssign {
                     object,
                     attr,
@@ -1706,6 +1720,9 @@ fn collect_scope_info_from_node(
         Node::SubscriptAssign { .. } => {
             // Subscript assignment doesn't create a new name, it modifies existing container
         }
+        Node::SubscriptDelete { .. } => {
+            // Subscript deletion doesn't create a new name, it modifies existing container
+        }
         Node::AttrAssign { .. } => {
             // Attribute assignment doesn't create a new name, it modifies existing object
         }
@@ -1883,6 +1900,9 @@ fn collect_cell_vars_from_node(
         Node::SubscriptAssign { index, value, .. } => {
             collect_cell_vars_from_expr(index, our_locals, cell_vars, interner);
             collect_cell_vars_from_expr(value, our_locals, cell_vars, interner);
+        }
+        Node::SubscriptDelete { index, .. } => {
+            collect_cell_vars_from_expr(index, our_locals, cell_vars, interner);
         }
         Node::AttrAssign { object, value, .. } => {
             collect_cell_vars_from_expr(object, our_locals, cell_vars, interner);
@@ -2106,6 +2126,10 @@ fn collect_referenced_names_from_node(node: &ParseNode, referenced: &mut AHashSe
             referenced.insert(interner.get_str(target.name_id).to_string());
             collect_referenced_names_from_expr(index, referenced, interner);
             collect_referenced_names_from_expr(value, referenced, interner);
+        }
+        Node::SubscriptDelete { target, index, .. } => {
+            referenced.insert(interner.get_str(target.name_id).to_string());
+            collect_referenced_names_from_expr(index, referenced, interner);
         }
         Node::AttrAssign { object, value, .. } => {
             collect_referenced_names_from_expr(object, referenced, interner);

@@ -252,10 +252,10 @@ impl<'a> Parser<'a> {
                 Some(value) => Ok(Node::Return(self.parse_expression(*value)?)),
                 None => Ok(Node::ReturnNone),
             },
-            Stmt::Delete(d) => Err(ParseError::not_implemented(
-                "the 'del' statement",
-                self.convert_range(d.range),
-            )),
+            Stmt::Delete(ast::StmtDelete { targets, range, .. }) => {
+                let target = first(targets, self.convert_range(range))?;
+                self.parse_delete(target)
+            }
             Stmt::TypeAlias(t) => Err(ParseError::not_implemented("type aliases", self.convert_range(t.range))),
             Stmt::Assign(ast::StmtAssign {
                 targets, value, range, ..
@@ -508,6 +508,24 @@ impl<'a> Parser<'a> {
                 target: self.parse_identifier(lhs)?,
                 object: self.parse_expression(rhs)?,
             }),
+        }
+    }
+
+    fn parse_delete(&mut self, target: AstExpr) -> Result<ParseNode, ParseError> {
+        match target {
+            // subscript deletion like `del list[index]` or `del dict[key]`
+            AstExpr::Subscript(ast::ExprSubscript {
+                value, slice, range, ..
+            }) => Ok(Node::SubscriptDelete {
+                target: self.parse_identifier(*value)?,
+                index: self.parse_expression(*slice)?,
+                target_position: self.convert_range(range),
+            }),
+            // todo: other deletion targets are not yet supported
+            _ => Err(ParseError::not_implemented(
+                "del with non-subscript targets",
+                self.convert_range(target.range()),
+            )),
         }
     }
 

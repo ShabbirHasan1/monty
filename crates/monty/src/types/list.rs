@@ -182,6 +182,24 @@ impl List {
         let heap_id = heap.allocate(HeapData::List(Self::new(items)))?;
         Ok(Value::Ref(heap_id))
     }
+
+    fn try_derive_normalized_index(&self, index: i64) -> Option<usize> {
+        // Convert to usize, handling negative indices (Python-style: -1 = last element)
+        let len = i64::try_from(self.items.len()).expect("list length exceeds i64::MAX");
+
+        // branchless normalization using bit manipulation
+        // if index < 0: mask = -1 (all bits set), so we add len
+        // if index >= 0: mask = 0, so we add 0
+        let mask = index >> 63;
+        let normalized_index = index + (mask & len);
+
+        let in_bounds = normalized_index.cast_unsigned() < len.cast_unsigned();
+
+        // safety: if in_bounds is true, normalized_index is guaranteed
+        // to be in [0, len), so the cast is safe
+        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        in_bounds.then_some(normalized_index as usize)
+    }
 }
 
 impl From<List> for Vec<Value> {
@@ -220,18 +238,10 @@ impl PyTrait for List {
             _ => return Err(ExcType::type_error_indices(Type::List, key.py_type(heap))),
         };
 
-        // Convert to usize, handling negative indices (Python-style: -1 = last element)
-        let len = i64::try_from(self.items.len()).expect("list length exceeds i64::MAX");
-        let normalized_index = if index < 0 { index + len } else { index };
-
-        // Bounds check
-        if normalized_index < 0 || normalized_index >= len {
+        let Some(idx) = self.try_derive_normalized_index(index) else {
             return Err(ExcType::list_index_error());
-        }
+        };
 
-        // Return clone of the item with proper refcount increment
-        // Safety: normalized_index is validated to be in [0, len) above
-        let idx = usize::try_from(normalized_index).expect("list index validated non-negative");
         Ok(self.items[idx].clone_with_heap(heap))
     }
 
@@ -254,18 +264,11 @@ impl PyTrait for List {
             }
         };
 
-        // Normalize negative indices (Python-style: -1 = last element)
-        let len = i64::try_from(self.items.len()).expect("list length exceeds i64::MAX");
-        let normalized_index = if index < 0 { index + len } else { index };
-
-        // Bounds check
-        if normalized_index < 0 || normalized_index >= len {
+        // Replace value, drop old one
+        let Some(idx) = self.try_derive_normalized_index(index) else {
             value.drop_with_heap(heap);
             return Err(ExcType::list_assignment_index_error());
-        }
-
-        // Replace value, drop old one
-        let idx = usize::try_from(normalized_index).expect("index validated non-negative");
+        };
         let old_value = std::mem::replace(&mut self.items[idx], value);
         old_value.drop_with_heap(heap);
 
@@ -274,6 +277,27 @@ impl PyTrait for List {
             self.contains_refs = true;
             heap.mark_potential_cycle();
         }
+
+        Ok(())
+    }
+
+    fn py_delitem(&mut self, key: Value, heap: &mut Heap<impl ResourceTracker>, _interns: &Interns) -> RunResult<()> {
+        // Extract integer index, accepting both Int and Bool (True=1, False=0)
+        let index = match key {
+            Value::Int(i) => i,
+            Value::Bool(b) => i64::from(b),
+            _ => {
+                let key_type = key.py_type(heap);
+                key.drop_with_heap(heap);
+                return Err(ExcType::type_error_list_assignment_indices(key_type));
+            }
+        };
+
+        let Some(idx) = self.try_derive_normalized_index(index) else {
+            return Err(ExcType::list_index_error());
+        };
+        let removed_value = self.items.remove(idx);
+        removed_value.drop_with_heap(heap);
 
         Ok(())
     }

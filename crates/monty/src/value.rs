@@ -1431,6 +1431,19 @@ impl PyTrait for Value {
             ))),
         }
     }
+
+    fn py_delitem(&mut self, key: Self, heap: &mut Heap<impl ResourceTracker>, interns: &Interns) -> RunResult<()> {
+        match self {
+            Self::Ref(id) => {
+                let id = *id;
+                heap.with_entry_mut(id, |heap, data| data.py_delitem(key, heap, interns))
+            }
+            _ => Err(ExcType::type_error(format!(
+                "'{}' object does not support item deletion",
+                self.py_type(heap)
+            ))),
+        }
+    }
 }
 
 impl Value {

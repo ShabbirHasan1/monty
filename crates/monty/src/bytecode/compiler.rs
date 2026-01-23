@@ -291,6 +291,18 @@ impl<'a> Compiler<'a> {
                 self.code.emit(Opcode::StoreSubscr);
             }
 
+            Node::SubscriptDelete {
+                target,
+                index,
+                target_position,
+            } => {
+                self.compile_name(target);
+                self.compile_expr(index)?;
+                // Set location to the target (e.g., `lst[10]`) for proper caret in tracebacks
+                self.code.set_location(*target_position, None);
+                self.code.emit(Opcode::DeleteSubscr);
+            }
+
             Node::AttrAssign {
                 object,
                 attr,

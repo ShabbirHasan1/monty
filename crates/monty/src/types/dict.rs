@@ -597,6 +597,21 @@ impl PyTrait for Dict {
         Ok(())
     }
 
+    fn py_delitem(&mut self, key: Value, heap: &mut Heap<impl ResourceTracker>, interns: &Interns) -> RunResult<()> {
+        if let Some((old_key, old_value)) = self.pop(&key, heap, interns)? {
+            old_key.drop_with_heap(heap);
+            old_value.drop_with_heap(heap);
+            key.drop_with_heap(heap);
+
+            Ok(())
+        } else {
+            let err = ExcType::key_error(&key, heap, interns);
+            key.drop_with_heap(heap);
+
+            Err(err)
+        }
+    }
+
     fn py_call_attr(
         &mut self,
         heap: &mut Heap<impl ResourceTracker>,

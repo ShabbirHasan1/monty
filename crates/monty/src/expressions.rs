@@ -472,6 +472,15 @@ pub enum Node<F> {
         /// Source position for error reporting.
         position: CodeRange,
     },
+    /// Subscript deletion (e.g., `del lst[10]` or `del d['key']`).
+    ///
+    /// Deletes an item from a subscriptable object. For lists, this removes the element at the index.
+    /// For dicts, this removes the key-value pair. Returns an error if the index/key doesn't exist.
+    SubscriptDelete {
+        target: Identifier,
+        index: ExprLoc,
+        target_position: CodeRange,
+    },
 }
 
 /// A prepared function definition with resolved names and scope information.

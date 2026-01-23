@@ -610,6 +610,17 @@ impl PyTrait for HeapData {
             _ => Err(ExcType::type_error_not_sub_assignment(self.py_type(heap))),
         }
     }
+
+    fn py_delitem(&mut self, key: Value, heap: &mut Heap<impl ResourceTracker>, interns: &Interns) -> RunResult<()> {
+        match self {
+            Self::List(l) => l.py_delitem(key, heap, interns),
+            Self::Dict(d) => d.py_delitem(key, heap, interns),
+            _ => Err(ExcType::type_error(format!(
+                "'{}' object does not support item deletion",
+                self.py_type(heap)
+            ))),
+        }
+    }
 }
 
 /// Hash caching state stored alongside each heap entry.
