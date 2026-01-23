@@ -10,6 +10,7 @@ mod bin;
 mod chr;
 mod divmod;
 mod enumerate;
+mod getattr;
 mod hash;
 mod hex;
 mod id;
@@ -169,7 +170,7 @@ pub enum BuiltinsFunctions {
     // float - handled by Type enum
     // Format,
     // frozenset - handled by Type enum
-    // Getattr,
+    Getattr,
     // Globals,
     // Hasattr,
     Hash,
@@ -235,6 +236,7 @@ impl BuiltinsFunctions {
             Self::Chr => chr::builtin_chr(heap, args),
             Self::Divmod => divmod::builtin_divmod(heap, args),
             Self::Enumerate => enumerate::builtin_enumerate(heap, args, interns),
+            Self::Getattr => getattr::builtin_getattr(heap, args, interns),
             Self::Hash => hash::builtin_hash(heap, args, interns),
             Self::Hex => hex::builtin_hex(heap, args),
             Self::Id => id::builtin_id(heap, args),
