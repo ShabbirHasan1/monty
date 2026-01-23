@@ -1,8 +1,13 @@
 //! Implementation of the next() builtin function.
 
 use crate::{
-    args::ArgValues, exception_private::RunResult, heap::Heap, intern::Interns, resource::ResourceTracker,
-    types::iter::iterator_next, value::Value,
+    args::ArgValues,
+    exception_private::RunResult,
+    heap::Heap,
+    intern::Interns,
+    resource::ResourceTracker,
+    types::iter::iterator_next,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the next() builtin function.

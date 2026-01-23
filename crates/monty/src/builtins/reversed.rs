@@ -7,7 +7,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::{List, MontyIter},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the reversed() builtin function.

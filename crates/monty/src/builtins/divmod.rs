@@ -9,7 +9,7 @@ use crate::{
     heap::{Heap, HeapData},
     resource::ResourceTracker,
     types::{LongInt, PyTrait, Tuple},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the divmod() builtin function.

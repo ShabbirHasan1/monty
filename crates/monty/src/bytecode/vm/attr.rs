@@ -6,6 +6,7 @@ use crate::{
     intern::StringId,
     io::PrintWriter,
     resource::ResourceTracker,
+    value::DropWithHeap,
 };
 
 impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {

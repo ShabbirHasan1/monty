@@ -24,7 +24,7 @@ use crate::{
     intern::{Interns, StaticStrings},
     resource::ResourceTracker,
     types::Type,
-    value::{Attr, Value},
+    value::{Attr, DropWithHeap, Value},
 };
 
 /// Python tuple value stored on the heap.

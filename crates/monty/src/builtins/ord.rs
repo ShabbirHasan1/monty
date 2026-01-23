@@ -7,7 +7,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::PyTrait,
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the ord() builtin function.

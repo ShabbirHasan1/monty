@@ -6,7 +6,7 @@ use crate::{
     heap::Heap,
     resource::ResourceTracker,
     types::PyTrait,
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 pub fn normalize_bool_to_int(value: Value) -> Value {

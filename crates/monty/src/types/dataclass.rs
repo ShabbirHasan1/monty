@@ -10,7 +10,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::Type,
-    value::{Attr, Value},
+    value::{Attr, DropWithHeap, Value},
 };
 
 /// Python dataclass instance type.

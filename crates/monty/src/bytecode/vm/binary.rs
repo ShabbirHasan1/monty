@@ -6,7 +6,7 @@ use crate::{
     io::PrintWriter,
     resource::ResourceTracker,
     types::PyTrait,
-    value::BitwiseOp,
+    value::{BitwiseOp, DropWithHeap},
 };
 
 impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {

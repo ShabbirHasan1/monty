@@ -8,7 +8,7 @@ use crate::{
     intern::{Interns, StringId},
     parse::ParseError,
     types::{Dict, dict::DictIntoIter},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Type for method call arguments.
@@ -253,12 +253,10 @@ impl ArgValues {
             Self::ArgsKargs { args, .. } => args.len(),
         }
     }
+}
 
-    /// Properly drops all values in the arguments, decrementing reference counts.
-    ///
-    /// This must be called when discarding `ArgValues` that may contain `Value::Ref`
-    /// variants to maintain correct reference counts on the heap.
-    pub fn drop_with_heap(self, heap: &mut Heap<impl ResourceTracker>) {
+impl DropWithHeap for ArgValues {
+    fn drop_with_heap<R: ResourceTracker>(self, heap: &mut Heap<R>) {
         match self {
             Self::Empty => {}
             Self::One(v) => v.drop_with_heap(heap),
@@ -326,12 +324,8 @@ impl Iterator for ArgPosIter {
 
 impl ExactSizeIterator for ArgPosIter {}
 
-impl ArgPosIter {
-    /// Drops all remaining values in the iterator, decrementing reference counts
-    ///
-    /// This should be called when discarding a partially-consumed iterator to ensure
-    /// proper cleanup of any remaining `Value::Ref` variants
-    pub fn drop_with_heap(self, heap: &mut Heap<impl ResourceTracker>) {
+impl DropWithHeap for ArgPosIter {
+    fn drop_with_heap<R: ResourceTracker>(self, heap: &mut Heap<R>) {
         for v in self {
             v.drop_with_heap(heap);
         }
@@ -390,9 +384,10 @@ impl KwargsValues {
                 .collect(),
         }
     }
+}
 
-    /// Properly drops all values in the arguments, decrementing reference counts.
-    pub fn drop_with_heap(self, heap: &mut Heap<impl ResourceTracker>) {
+impl DropWithHeap for KwargsValues {
+    fn drop_with_heap<R: ResourceTracker>(self, heap: &mut Heap<R>) {
         match self {
             Self::Empty => {}
             Self::Inline(kvs) => {

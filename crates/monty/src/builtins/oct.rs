@@ -9,7 +9,7 @@ use crate::{
     heap::{Heap, HeapData},
     resource::ResourceTracker,
     types::{PyTrait, Str},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the oct() builtin function.

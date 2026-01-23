@@ -7,7 +7,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::{List, MontyIter, Tuple},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the zip() builtin function.

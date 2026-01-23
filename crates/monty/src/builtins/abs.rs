@@ -9,7 +9,7 @@ use crate::{
     heap::{Heap, HeapData},
     resource::ResourceTracker,
     types::{LongInt, PyTrait},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the abs() builtin function.

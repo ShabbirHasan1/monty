@@ -9,7 +9,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::{List, MontyIter, PyTrait},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the sorted() builtin function.

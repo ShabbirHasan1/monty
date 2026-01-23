@@ -11,7 +11,7 @@ use crate::{
     intern::{Interns, StaticStrings},
     resource::ResourceTracker,
     types::Type,
-    value::{Attr, Value},
+    value::{Attr, DropWithHeap, Value},
 };
 
 /// Entry in the set storage, containing a value and its cached hash.

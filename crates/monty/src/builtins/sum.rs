@@ -7,7 +7,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::{MontyIter, PyTrait, Type},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the sum() builtin function.

@@ -15,7 +15,7 @@ use crate::{
     parse::CodeRange,
     resource::ResourceTracker,
     types::{PyTrait, Type, str::string_repr_fmt},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Result type alias for operations that can produce a runtime error.

@@ -6,7 +6,7 @@ use crate::{
     io::PrintWriter,
     resource::ResourceTracker,
     types::PyTrait,
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {

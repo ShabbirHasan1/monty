@@ -6,7 +6,7 @@ use crate::{
     heap::Heap,
     resource::ResourceTracker,
     types::{PyTrait, str::allocate_char},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the chr() builtin function.

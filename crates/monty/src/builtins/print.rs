@@ -8,7 +8,7 @@ use crate::{
     io::PrintWriter,
     resource::ResourceTracker,
     types::PyTrait,
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Implementation of the print() builtin function.

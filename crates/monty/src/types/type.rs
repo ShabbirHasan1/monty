@@ -9,7 +9,7 @@ use crate::{
     intern::Interns,
     resource::ResourceTracker,
     types::{Bytes, Dict, FrozenSet, List, MontyIter, PyTrait, Range, Set, Slice, Str, Tuple, str::StringRepr},
-    value::Value,
+    value::{DropWithHeap, Value},
 };
 
 /// Represents the Python type of a value.

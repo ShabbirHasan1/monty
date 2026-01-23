@@ -27,7 +27,7 @@ use crate::{
     parse::CodeRange,
     resource::ResourceTracker,
     types::{LongInt, MontyIter, PyTrait, iter::advance_on_heap},
-    value::{BitwiseOp, Value},
+    value::{BitwiseOp, DropWithHeap, Value},
 };
 
 /// Tries an operation and handles exceptions, reloading cached frame state.
