@@ -153,6 +153,18 @@ pub enum Expr {
         op: CmpOperator,
         right: Box<ExprLoc>,
     },
+    /// Chain comparison expression: `a < b < c < d`
+    ///
+    /// Unlike single comparisons, chain comparisons evaluate intermediate values
+    /// only once and short-circuit on the first false result. Compiled to bytecode
+    /// that uses stack manipulation (Dup, Rot) rather than temporary variables,
+    /// avoiding namespace pollution.
+    ChainCmp {
+        /// The leftmost operand in the chain.
+        left: Box<ExprLoc>,
+        /// Sequence of (operator, operand) pairs: `[(op1, b), (op2, c), ...]`
+        comparisons: Vec<(CmpOperator, ExprLoc)>,
+    },
     List(Vec<ExprLoc>),
     Tuple(Vec<ExprLoc>),
     Subscript {
@@ -268,9 +280,10 @@ pub enum Expr {
     },
 }
 
-/// Target for tuple unpacking - can be a single name or nested tuple.
+/// Target for tuple unpacking - can be a single name, nested tuple, or starred target.
 ///
 /// Supports recursive structures like `(a, b), c` or `a, (b, c)`.
+/// Also supports starred targets like `first, *rest = [1, 2, 3, 4]`.
 /// Used in assignment statements, for loop targets, and comprehension targets.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum UnpackTarget {
@@ -283,6 +296,10 @@ pub enum UnpackTarget {
         /// Source position covering all targets (for error caret placement)
         position: CodeRange,
     },
+    /// Starred target: `*rest` - captures remaining values into a list.
+    ///
+    /// Only one starred target is allowed per unpacking level.
+    Starred(Identifier),
 }
 
 /// A generator clause in a comprehension: `for target in iter [if cond1] [if cond2]...`

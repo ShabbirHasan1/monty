@@ -418,6 +418,9 @@ impl PyTrait for Value {
                 }
             }
             (Self::Float(v1), Self::Float(v2)) => Ok(Some(Self::Float(v1 + v2))),
+            // Int + Float and Float + Int
+            (Self::Int(a), Self::Float(b)) => Ok(Some(Self::Float(*a as f64 + b))),
+            (Self::Float(a), Self::Int(b)) => Ok(Some(Self::Float(a + *b as f64))),
             (Self::Ref(id1), Self::Ref(id2)) => {
                 // Check if both are LongInts
                 let is_longint1 = matches!(heap.get(*id1), HeapData::LongInt(_));
@@ -542,6 +545,11 @@ impl PyTrait for Value {
                     Ok(None)
                 }
             }
+            // Float - Float
+            (Self::Float(a), Self::Float(b)) => Ok(Some(Self::Float(a - b))),
+            // Int - Float and Float - Int
+            (Self::Int(a), Self::Float(b)) => Ok(Some(Self::Float(*a as f64 - b))),
+            (Self::Float(a), Self::Int(b)) => Ok(Some(Self::Float(a - *b as f64))),
             _ => Ok(None),
         }
     }
@@ -1629,6 +1637,32 @@ impl Value {
                     HeapData::Set(set) => set.contains(item, heap, interns),
                     HeapData::FrozenSet(fset) => fset.contains(item, heap, interns),
                     HeapData::Str(s) => str_contains(s.as_str(), item, heap, interns),
+                    HeapData::Range(range) => {
+                        // Range containment is O(1) - check bounds and step alignment
+                        let n = match item {
+                            Self::Int(i) => *i,
+                            Self::Bool(b) => i64::from(*b),
+                            Self::Float(f) => {
+                                // Floats are contained if they equal an integer in the range
+                                // e.g., 3.0 in range(5) is True, but 3.5 in range(5) is False
+                                if f.fract() != 0.0 {
+                                    return Ok(false);
+                                }
+                                // Check if float is within i64 range and convert safely
+                                // f64 can represent integers up to 2^53 exactly
+                                let int_val = f.trunc();
+                                if int_val < i64::MIN as f64 || int_val > i64::MAX as f64 {
+                                    return Ok(false);
+                                }
+                                // Safe conversion: we've verified it's a whole number in i64 range
+                                #[expect(clippy::cast_possible_truncation)]
+                                let n = int_val as i64;
+                                n
+                            }
+                            _ => return Ok(false),
+                        };
+                        Ok(range.contains(n))
+                    }
                     other => {
                         let type_name = other.py_type(heap);
                         Err(ExcType::type_error(format!(

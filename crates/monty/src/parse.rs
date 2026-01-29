@@ -509,6 +509,19 @@ impl<'a> Parser<'a> {
                     object: self.parse_expression(rhs)?,
                 })
             }
+            // List unpacking like [a, b] = value or [a, *rest] = value
+            AstExpr::List(ast::ExprList { elts, range, .. }) => {
+                let targets_position = self.convert_range(range);
+                let targets = elts
+                    .into_iter()
+                    .map(|e| self.parse_unpack_target(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Node::UnpackAssign {
+                    targets,
+                    targets_position,
+                    object: self.parse_expression(rhs)?,
+                })
+            }
             // Simple identifier assignment like x = value
             _ => Ok(Node::Assign {
                 target: self.parse_identifier(lhs)?,
@@ -743,14 +756,26 @@ impl<'a> Parser<'a> {
                 comparators,
                 range,
                 ..
-            }) => Ok(ExprLoc::new(
-                self.convert_range(range),
-                Expr::CmpOp {
-                    left: Box::new(self.parse_expression(*left)?),
-                    op: convert_compare_op(first(ops.into_vec(), self.convert_range(range))?),
-                    right: Box::new(self.parse_expression(first(comparators.into_vec(), self.convert_range(range))?)?),
-                },
-            )),
+            }) => {
+                let position = self.convert_range(range);
+                let ops_vec = ops.into_vec();
+                let comparators_vec = comparators.into_vec();
+
+                // Simple case: single comparison (most common)
+                if ops_vec.len() == 1 {
+                    return Ok(ExprLoc::new(
+                        position,
+                        Expr::CmpOp {
+                            left: Box::new(self.parse_expression(*left)?),
+                            op: convert_compare_op(ops_vec.into_iter().next().unwrap()),
+                            right: Box::new(self.parse_expression(comparators_vec.into_iter().next().unwrap())?),
+                        },
+                    ));
+                }
+
+                // Chain comparison: transform to nested And expressions
+                self.parse_chain_comparison(*left, ops_vec, comparators_vec, position)
+            }
             AstExpr::Call(ast::ExprCall {
                 func, arguments, range, ..
             }) => {
@@ -995,6 +1020,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a chain comparison expression like `a < b < c < d`.
+    ///
+    /// Chain comparisons evaluate each intermediate value only once and short-circuit
+    /// on the first false result. This creates an `Expr::ChainCmp` node which is
+    /// compiled to bytecode using stack manipulation (Dup, Rot) rather than
+    /// temporary variables, avoiding namespace pollution.
+    fn parse_chain_comparison(
+        &mut self,
+        left: AstExpr,
+        ops: Vec<CmpOp>,
+        comparators: Vec<AstExpr>,
+        position: CodeRange,
+    ) -> Result<ExprLoc, ParseError> {
+        let left_expr = self.parse_expression(left)?;
+        let comparisons = ops
+            .into_iter()
+            .zip(comparators)
+            .map(|(op, cmp)| Ok((convert_compare_op(op), self.parse_expression(cmp)?)))
+            .collect::<Result<Vec<_>, ParseError>>()?;
+
+        Ok(ExprLoc::new(
+            position,
+            Expr::ChainCmp {
+                left: Box::new(left_expr),
+                comparisons,
+            },
+        ))
+    }
+
     /// Parses an unpack target - either a single identifier or a nested tuple.
     ///
     /// Handles patterns like `a` (single variable), `a, b` (flat tuple), or `(a, b), c` (nested).
@@ -1009,6 +1063,46 @@ impl<'a> Parser<'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 if targets.is_empty() {
                     return Err(ParseError::syntax("empty tuple in unpack target", position));
+                }
+                // Validate at most one starred target
+                let starred_count = targets.iter().filter(|t| matches!(t, UnpackTarget::Starred(_))).count();
+                if starred_count > 1 {
+                    return Err(ParseError::syntax(
+                        "multiple starred expressions in assignment",
+                        position,
+                    ));
+                }
+                Ok(UnpackTarget::Tuple { targets, position })
+            }
+            AstExpr::Starred(ast::ExprStarred { value, range, .. }) => {
+                // Starred target must be a simple name
+                match *value {
+                    AstExpr::Name(ast::ExprName { id, range, .. }) => {
+                        Ok(UnpackTarget::Starred(self.identifier(&id, range)))
+                    }
+                    _ => Err(ParseError::syntax(
+                        "starred assignment target must be a name",
+                        self.convert_range(range),
+                    )),
+                }
+            }
+            AstExpr::List(ast::ExprList { elts, range, .. }) => {
+                // List unpacking target [a, b, *rest] - same as tuple
+                let position = self.convert_range(range);
+                let targets = elts
+                    .into_iter()
+                    .map(|e| self.parse_unpack_target(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if targets.is_empty() {
+                    return Err(ParseError::syntax("empty list in unpack target", position));
+                }
+                // Validate at most one starred target
+                let starred_count = targets.iter().filter(|t| matches!(t, UnpackTarget::Starred(_))).count();
+                if starred_count > 1 {
+                    return Err(ParseError::syntax(
+                        "multiple starred expressions in assignment",
+                        position,
+                    ));
                 }
                 Ok(UnpackTarget::Tuple { targets, position })
             }
