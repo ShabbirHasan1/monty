@@ -11,6 +11,7 @@ use ahash::AHashSet;
 use num_bigint::BigInt;
 use num_integer::Integer;
 use num_traits::{ToPrimitive, Zero};
+use smallvec::smallvec;
 
 use crate::{
     asyncio::CallId,
@@ -21,7 +22,7 @@ use crate::{
     modules::ModuleFunctions,
     resource::{LARGE_RESULT_THRESHOLD, ResourceTracker},
     types::{
-        LongInt, PyTrait, Str, Tuple, Type,
+        LongInt, PyTrait, Str, Type, allocate_tuple,
         bytes::{bytes_repr_fmt, get_byte_at_index, get_bytes_slice},
         slice,
         str::{allocate_char, get_char_at_index, get_str_slice, string_repr_fmt},
@@ -1766,12 +1767,11 @@ impl Value {
                         // Construct tuple with 0 or 1 elements based on whether arg exists
                         let elements = if let Some(arg_str) = arg_clone {
                             let str_id = heap.allocate(HeapData::Str(Str::from(arg_str)))?;
-                            vec![Self::Ref(str_id)]
+                            smallvec![Self::Ref(str_id)]
                         } else {
-                            vec![]
+                            smallvec![]
                         };
-                        let tuple_id = heap.allocate(HeapData::Tuple(Tuple::new(elements)))?;
-                        Ok(Self::Ref(tuple_id))
+                        Ok(allocate_tuple(elements, heap)?)
                     } else {
                         let exc_type = exc.py_type();
                         Err(ExcType::attribute_error(exc_type, attr_name))
