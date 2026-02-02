@@ -3,7 +3,8 @@ use std::{
     collections::hash_map::DefaultHasher,
     fmt::Write,
     hash::{Hash, Hasher},
-    mem::{MaybeUninit, discriminant},
+    mem::{ManuallyDrop, MaybeUninit, discriminant},
+    ptr::addr_of,
     vec,
 };
 
@@ -1692,10 +1693,9 @@ impl<'a, T: ResourceTracker, H: ContainsHeap<T>, V: DropWithHeap<T>> HeapGuard<'
     /// Consumes the guard and returns the contained value without dropping it.
     #[inline]
     pub fn into_inner(self) -> V {
-        // SAFETY: value is initialized except during Drop, which `forget` prevents
-        let value = unsafe { self.value.as_ptr().read() };
-        std::mem::forget(self);
-        value
+        let this = ManuallyDrop::new(self);
+        // SAFETY: value is initialized except during Drop, which `ManuallyDrop` prevents
+        unsafe { this.value.as_ptr().read() }
     }
 
     /// Borrows the guard as its constituent parts
@@ -1712,6 +1712,14 @@ impl<'a, T: ResourceTracker, H: ContainsHeap<T>, V: DropWithHeap<T>> HeapGuard<'
         // SAFETY: value is initialized except during Drop, which is not happening here
         let value = unsafe { self.value.assume_init_mut() };
         (value, self.heap)
+    }
+
+    /// Consumes the guard and returns the parts, so that the can be used separately
+    #[inline]
+    pub fn into_parts(self) -> (V, &'a mut H) {
+        let this = ManuallyDrop::new(self);
+        // SAFETY: `ManuallyDrop` prevents `Drop` on self, so we can recover the parts
+        unsafe { (this.value.as_ptr().read(), addr_of!(this.heap).read()) }
     }
 
     /// Borrows just the heap out of the guard
