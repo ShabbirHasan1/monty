@@ -4,6 +4,7 @@ use std::{
     fmt::Write,
     hash::{Hash, Hasher},
     mem::{MaybeUninit, discriminant},
+    vec,
 };
 
 use ahash::AHashSet;
@@ -1619,27 +1620,78 @@ impl<T: ResourceTracker> Drop for Heap<T> {
     }
 }
 
-/// Guard that contains a `Value` and drops it from the heap when dropped.
-pub struct HeapGuard<'a, T: ResourceTracker> {
-    // uninitialized only during Drop implementation
-    value: MaybeUninit<Value>,
-    heap: &'a mut Heap<T>,
+/// This trait represents types that contain a `Heap`; it allows for more complex structures
+/// to participate in the `HeapGuard` pattern.
+pub(crate) trait ContainsHeap<T: ResourceTracker> {
+    fn heap_mut(&mut self) -> &mut Heap<T>;
 }
 
-impl<'a, T: ResourceTracker> HeapGuard<'a, T> {
+impl<T: ResourceTracker> ContainsHeap<T> for Heap<T> {
+    #[inline]
+    fn heap_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
+/// This trait represents types that should be dropped with a `Heap`.
+pub(crate) trait DropWithHeap<T: ResourceTracker> {
+    fn drop_with_heap(self, heap: &mut Heap<T>);
+}
+
+impl<T: ResourceTracker> DropWithHeap<T> for Value {
+    #[inline]
+    fn drop_with_heap(self, heap: &mut Heap<T>) {
+        Self::drop_with_heap(self, heap);
+    }
+}
+
+impl<T: ResourceTracker, U: DropWithHeap<T>> DropWithHeap<T> for Option<U> {
+    #[inline]
+    fn drop_with_heap(self, heap: &mut Heap<T>) {
+        if let Some(value) = self {
+            value.drop_with_heap(heap);
+        }
+    }
+}
+
+impl<T: ResourceTracker> DropWithHeap<T> for Vec<Value> {
+    fn drop_with_heap(self, heap: &mut Heap<T>) {
+        for value in self {
+            value.drop_with_heap(heap);
+        }
+    }
+}
+
+impl<T: ResourceTracker> DropWithHeap<T> for vec::IntoIter<Value> {
+    fn drop_with_heap(self, heap: &mut Heap<T>) {
+        for value in self {
+            value.drop_with_heap(heap);
+        }
+    }
+}
+
+/// Guard that contains a `Value` and drops it from the heap when dropped.
+pub(crate) struct HeapGuard<'a, T: ResourceTracker, H: ContainsHeap<T>, V: DropWithHeap<T>> {
+    // uninitialized only during Drop implementation
+    value: MaybeUninit<V>,
+    heap: &'a mut H,
+    _tracker: std::marker::PhantomData<T>,
+}
+
+impl<'a, T: ResourceTracker, H: ContainsHeap<T>, V: DropWithHeap<T>> HeapGuard<'a, T, H, V> {
     /// Creates a new `HeapGuard` for the given value and heap.
     #[inline]
-    pub fn new(value: Value, heap: &'a mut Heap<T>) -> Self {
+    pub fn new(value: V, heap: &'a mut H) -> Self {
         Self {
             value: MaybeUninit::new(value),
             heap,
+            _tracker: std::marker::PhantomData,
         }
     }
 
     /// Consumes the guard and returns the contained value without dropping it.
     #[inline]
-    #[expect(dead_code, reason = "expected to be used in future")]
-    pub fn into_value(self) -> Value {
+    pub fn into_inner(self) -> V {
         // SAFETY: value is initialized except during Drop, which `forget` prevents
         let value = unsafe { self.value.as_ptr().read() };
         std::mem::forget(self);
@@ -1648,17 +1700,31 @@ impl<'a, T: ResourceTracker> HeapGuard<'a, T> {
 
     /// Borrows the guard as its constituent parts
     #[inline]
-    pub fn as_parts(&mut self) -> (&mut Value, &mut Heap<T>) {
+    pub fn as_parts(&mut self) -> (&V, &mut H) {
         // SAFETY: value is initialized except during Drop, which is not happening here
         let value = unsafe { self.value.assume_init_mut() };
         (value, self.heap)
     }
+
+    /// Borrows the guard as its constituent parts
+    #[inline]
+    pub fn as_parts_mut(&mut self) -> (&mut V, &mut H) {
+        // SAFETY: value is initialized except during Drop, which is not happening here
+        let value = unsafe { self.value.assume_init_mut() };
+        (value, self.heap)
+    }
+
+    /// Borrows just the heap out of the guard
+    #[inline]
+    pub fn heap(&mut self) -> &mut H {
+        self.heap
+    }
 }
 
-impl<T: ResourceTracker> Drop for HeapGuard<'_, T> {
+impl<T: ResourceTracker, H: ContainsHeap<T>, V: DropWithHeap<T>> Drop for HeapGuard<'_, T, H, V> {
     fn drop(&mut self) {
         // SAFETY: value is initialized until this read
-        unsafe { self.value.as_ptr().read() }.drop_with_heap(self.heap);
+        unsafe { self.value.as_ptr().read() }.drop_with_heap(self.heap.heap_mut());
     }
 }
 
@@ -1672,5 +1738,18 @@ macro_rules! defer_drop {
     ($value:ident, $heap:ident) => {
         let mut _guard = $crate::heap::HeapGuard::new($value, $heap);
         let ($value, $heap) = _guard.as_parts();
+    };
+}
+
+/// Helper macro to create a `HeapGuard` and immediately borrow the value out of it.
+///
+/// After this macro, both `$value` and `$heap` are reborrowed from the guard
+/// and can be used normally. The value will be automatically dropped when
+/// the guard goes out of scope.
+#[macro_export]
+macro_rules! defer_drop_mut {
+    ($value:ident, $heap:ident) => {
+        let mut _guard = $crate::heap::HeapGuard::new($value, $heap);
+        let ($value, $heap) = _guard.as_parts_mut();
     };
 }

@@ -5,6 +5,7 @@ use num_integer::Integer;
 
 use crate::{
     args::ArgValues,
+    defer_drop,
     exception_private::{ExcType, RunResult, SimpleException},
     heap::{Heap, HeapData},
     resource::ResourceTracker,
@@ -20,8 +21,10 @@ pub fn builtin_divmod(heap: &mut Heap<impl ResourceTracker>, args: ArgValues) ->
     let (a, b) = args.get_two_args("divmod", heap)?;
     let a = super::round::normalize_bool_to_int(a);
     let b = super::round::normalize_bool_to_int(b);
+    defer_drop!(a, heap);
+    defer_drop!(b, heap);
 
-    let result = match (&a, &b) {
+    match (a, b) {
         (Value::Int(x), Value::Int(y)) => {
             if *y == 0 {
                 Err(ExcType::divmod_by_zero())
@@ -152,11 +155,7 @@ pub fn builtin_divmod(heap: &mut Heap<impl ResourceTracker>, args: ArgValues) ->
             )
             .into())
         }
-    };
-
-    a.drop_with_heap(heap);
-    b.drop_with_heap(heap);
-    result
+    }
 }
 
 /// Computes Python-style floor division and modulo.

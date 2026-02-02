@@ -33,7 +33,7 @@
 use crate::{
     args::ArgValues,
     exception_private::{ExcType, RunResult},
-    heap::{Heap, HeapData, HeapId},
+    heap::{DropWithHeap, Heap, HeapData, HeapId},
     intern::{BytesId, Interns, StringId},
     resource::ResourceTracker,
     types::{PyTrait, Range, str::allocate_char},
@@ -743,5 +743,12 @@ impl IterValue {
             | HeapData::Coroutine(_)
             | HeapData::GatherFuture(_) => None,
         }
+    }
+}
+
+impl<T: ResourceTracker> DropWithHeap<T> for MontyIter {
+    #[inline]
+    fn drop_with_heap(self, heap: &mut Heap<T>) {
+        Self::drop_with_heap(self, heap);
     }
 }

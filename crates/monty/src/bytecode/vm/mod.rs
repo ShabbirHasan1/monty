@@ -24,7 +24,7 @@ use crate::{
     asyncio::{CallId, TaskId},
     bytecode::{code::Code, op::Opcode},
     exception_private::{ExcType, RunError, RunResult, SimpleException},
-    heap::{Heap, HeapData, HeapId},
+    heap::{ContainsHeap, Heap, HeapData, HeapId},
     intern::{ExtFunctionId, FunctionId, Interns, StringId},
     io::PrintWriter,
     modules::BuiltinModule,
@@ -1657,5 +1657,11 @@ impl<'a, T: ResourceTracker, P: PrintWriter> VM<'a, T, P> {
         let value = self.pop();
         let cell_id = self.current_frame().cells[slot as usize];
         self.heap.set_cell_value(cell_id, value);
+    }
+}
+
+impl<T: ResourceTracker, P: PrintWriter> ContainsHeap<T> for VM<'_, T, P> {
+    fn heap_mut(&mut self) -> &mut Heap<T> {
+        self.heap
     }
 }
