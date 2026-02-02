@@ -615,6 +615,8 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
         let namespace_idx = self.namespaces.new_namespace(func.namespace_size, self.heap)?;
 
         let namespace = self.namespaces.get_mut(namespace_idx).mut_vec();
+        namespace.reserve(func.namespace_size);
+
         // 2. Bind arguments to parameters
         {
             let bind_result = func
@@ -630,6 +632,9 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
             }
         }
 
+        // 3. Fill remaining slots with Undefined
+        namespace.resize_with(func.namespace_size, || Value::Undefined);
+
         // Clean up defaults - they were copied into the namespace by bind()
         for default in defaults {
             default.drop_with_heap(self.heap);
@@ -638,7 +643,7 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
         // Track created cell HeapIds for the frame
         let mut frame_cells: Vec<HeapId> = Vec::with_capacity(func.cell_var_count + cells.len());
 
-        // 3. Create cells for variables captured by nested functions
+        // 4. Create cells for variables captured by nested functions
         {
             let param_count = func.signature.total_slots();
             for (i, maybe_param_idx) in func.cell_param_indices.iter().enumerate() {
@@ -650,22 +655,17 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
                 };
                 let cell_id = self.heap.allocate(HeapData::Cell(cell_value))?;
                 frame_cells.push(cell_id);
-                namespace.resize_with(cell_slot, || Value::Undefined);
-                namespace.push(Value::Ref(cell_id));
+                namespace[cell_slot] = Value::Ref(cell_id);
             }
 
-            // 4. Copy captured cells (free vars) into namespace
+            // 5. Copy captured cells (free vars) into namespace
             let free_var_start = param_count + func.cell_var_count;
             for (i, &cell_id) in cells.iter().enumerate() {
                 self.heap.inc_ref(cell_id);
                 frame_cells.push(cell_id);
                 let slot = free_var_start + i;
-                namespace.resize_with(slot, || Value::Undefined);
-                namespace.push(Value::Ref(cell_id));
+                namespace[slot] = Value::Ref(cell_id);
             }
-
-            // 5. Fill remaining slots with Undefined
-            namespace.resize_with(func.namespace_size, || Value::Undefined);
         }
 
         let code = &func.code;
