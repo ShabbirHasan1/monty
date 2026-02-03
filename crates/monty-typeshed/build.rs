@@ -89,13 +89,13 @@ fn write_zipped_typeshed_to(writer: File) -> ZipResult<File> {
 /// This mirrors the `update-typeshed` Makefile target.
 fn run_update_script() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let update_script = Path::new(&manifest_dir).join("update.py");
+    let update_script = Path::new(&manifest_dir).join("vendor.py");
 
     println!("Running update.py to update vendored typeshed...");
     let status = Command::new("uv")
-        .args(["run", update_script.to_str().unwrap()])
+        .args(["run", update_script.to_str().unwrap(), "--skip-existing"])
         .status()
-        .expect("Failed to run update.py");
+        .expect("Failed to run vendor.py");
     assert!(status.success(), "update.py failed");
 
     println!("Running ruff format...");

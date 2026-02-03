@@ -313,6 +313,11 @@ def main() -> int:
     """Main entry point."""
     # Clean up any stale files from previous runs
     if VENDOR_DIR.exists():
+        if '--skip-existing' in sys.argv:
+            # if the `--skip-existing` flag is passed, exit early if the vendor directory exists
+            print('`--skip-existing`: exiting early since the vendor directory exists')
+            return 0
+
         print(f'Removing existing {VENDOR_DIR}...')
         shutil.rmtree(VENDOR_DIR)
 
@@ -355,4 +360,4 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    exit(main())
