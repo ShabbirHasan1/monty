@@ -144,7 +144,7 @@ STDLIB_DIR = VENDOR_DIR / 'stdlib'
 CUSTOM_DIR = SCRIPT_DIR / 'custom'
 TYPESHED_REPO_DIR = SCRIPT_DIR / 'typeshed-repo'
 
-TYPESHED_REPO_URL = 'git@github.com:python/typeshed.git'
+TYPESHED_REPO_URL = 'https://github.com/python/typeshed.git'
 # Specific commit to vendor from typeshed
 TYPESHED_COMMIT = '7f3ec0016092743c1d6738e61bed560614d4def8'
 
