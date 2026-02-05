@@ -13,7 +13,7 @@ use crate::{
     io::PrintWriter,
     resource::{ResourceError, ResourceTracker},
     types::Type,
-    value::{Attr, Value},
+    value::{EitherStr, Value},
 };
 
 /// Python list type, wrapping a Vec of Values.
@@ -385,7 +385,7 @@ impl PyTrait for List {
     fn py_call_attr(
         &mut self,
         heap: &mut Heap<impl ResourceTracker>,
-        attr: &Attr,
+        attr: &EitherStr,
         args: ArgValues,
         interns: &Interns,
     ) -> RunResult<Value> {
