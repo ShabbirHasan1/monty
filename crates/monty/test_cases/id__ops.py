@@ -55,9 +55,9 @@ assert a is b, 'list mutate preserves identity'
 assert id(1) != id('1'), 'int vs str distinct'
 
 # === Tuple singleton is guaranteed to have a unique id ===
-assert id([]) != id(()), 'list vs tuple distinct'
-assert id({}) != id(()), 'dict vs tuple distinct'
-assert id(1) != id(()), 'int vs tuple distinct'
+assert id([]) != id(()), 'list vs tuple singleton distinct'
+assert id({}) != id(()), 'dict vs tuple singleton distinct'
+assert id(1) != id(()), 'int vs tuple singleton distinct'
 
 # === Multiple refs share id ===
 x = [1, 2]
